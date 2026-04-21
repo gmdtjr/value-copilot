@@ -1,0 +1,76 @@
+import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from models.db import Base, engine
+from routes.tickers import router as tickers_router
+from routes.thesis import router as thesis_router
+from routes.reports import router as reports_router
+from routes.portfolio import router as portfolio_router
+from routes.market import router as market_router
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="Value Copilot API",
+    description="가치투자 AI 코파일럿 — Human-in-the-loop 구조",
+    version="0.1.0",
+)
+
+import os as _os
+_CORS_ORIGINS = [
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://3.26.145.173",
+]
+if _extra := _os.environ.get("CORS_ORIGIN"):
+    _CORS_ORIGINS.append(_extra)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(tickers_router, prefix="/api/tickers", tags=["tickers"])
+app.include_router(thesis_router, prefix="/api/thesis", tags=["thesis"])
+app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
+app.include_router(portfolio_router, prefix="/api/portfolio", tags=["portfolio"])
+app.include_router(market_router, prefix="/api/market", tags=["market"])
+
+
+@app.on_event("startup")
+async def startup():
+    from sqlalchemy import text as _text
+    # create_all 먼저 실행 → enum 타입 생성
+    Base.metadata.create_all(bind=engine)
+    # 이후 신규 enum 값 추가 (기존 DB 마이그레이션용, 신규 DB는 no-op)
+    with engine.connect() as conn:
+        for _val in ("discovery", "portfolio_review"):
+            conn.execute(_text(
+                f"DO $$ BEGIN "
+                f"IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel='{_val}' "
+                f"AND enumtypid=(SELECT oid FROM pg_type WHERE typname='reporttypeenum')) "
+                f"THEN ALTER TYPE reporttypeenum ADD VALUE '{_val}'; END IF; END $$;"
+            ))
+        conn.commit()
+    logger.info("DB tables ready")
+    from services.telegram_bot import start_bot
+    await start_bot()
+    from services.scheduler import start_scheduler
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    from services.telegram_bot import stop_bot
+    await stop_bot()
+    from services.scheduler import stop_scheduler
+    stop_scheduler()
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
