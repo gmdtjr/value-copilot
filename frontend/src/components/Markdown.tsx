@@ -84,13 +84,54 @@ function TableBlock({ lines, blockKey }: { lines: string[]; blockKey: string }) 
 export function Markdown({ content, className }: { content: string; className?: string }) {
   if (!content?.trim()) return null
 
+  // Strip XML section tags (e.g. <section name="..."> and </section>)
+  const cleaned = content.replace(/<section[^>]*>/g, '').replace(/<\/section>/g, '')
+
   const elements: React.ReactNode[] = []
-  const lines = content.split('\n')
+  const lines = cleaned.split('\n')
   let i = 0
 
   while (i < lines.length) {
     const line = lines[i]
     const key = `${i}`
+
+    // ── Fenced code block ─────────────────────────────────────────────────────
+    if (line.trimStart().startsWith('```')) {
+      const codeLines: string[] = []
+      i++
+      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
+        codeLines.push(lines[i])
+        i++
+      }
+      i++ // closing ```
+      if (codeLines.length > 0) {
+        elements.push(
+          <pre key={`code-${key}`} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 my-3 overflow-x-auto text-xs text-gray-300 font-mono leading-relaxed whitespace-pre-wrap">
+            {codeLines.join('\n')}
+          </pre>
+        )
+      }
+      continue
+    }
+
+    // ── Blockquote ────────────────────────────────────────────────────────────
+    if (line.startsWith('> ') || line === '>') {
+      const items: string[] = []
+      while (i < lines.length && (lines[i].startsWith('> ') || lines[i] === '>')) {
+        items.push(lines[i].startsWith('> ') ? lines[i].slice(2) : '')
+        i++
+      }
+      elements.push(
+        <blockquote key={`bq-${key}`} className="border-l-2 border-gray-600 pl-4 my-3 space-y-1">
+          {items.map((text, idx) =>
+            text
+              ? <p key={idx} className="text-gray-400 text-sm italic leading-relaxed">{parseInline(text, `bq-${key}-${idx}`)}</p>
+              : null
+          )}
+        </blockquote>
+      )
+      continue
+    }
 
     // ── Table: collect consecutive |rows| with blank lines between them ──────
     if (isTableRow(line)) {

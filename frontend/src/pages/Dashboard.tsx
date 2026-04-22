@@ -629,12 +629,22 @@ export default function Dashboard() {
                 <section>
                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🤖 AI 모델</p>
                   <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
-                    <PipelineRow
-                      label="Anthropic API"
-                      value=""
-                      tag={sysInfo.has_anthropic_key ? 'ok' : 'error'}
-                      tagLabel={sysInfo.has_anthropic_key ? 'API 키 설정됨' : 'ANTHROPIC_API_KEY 미설정'}
-                    />
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-gray-900">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <span className="text-sm text-gray-300 flex-shrink-0">Anthropic API</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${sysInfo.has_anthropic_key ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
+                          {sysInfo.has_anthropic_key ? 'API 키 설정됨' : 'ANTHROPIC_API_KEY 미설정'}
+                        </span>
+                      </div>
+                      <a
+                        href="https://console.anthropic.com/settings/billing"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-shrink-0 text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors ml-2"
+                      >
+                        잔액 확인 →
+                      </a>
+                    </div>
                     <PipelineRow label="공시 요약 (SEC / DART)" value="claude-haiku-4-5-20251001 · max_tokens 600" />
                     <PipelineRow label="Thesis 생성 / 리포트" value="claude-sonnet-4-6 · max_tokens 8192" />
                     <PipelineRow label="Break Monitor / 브리핑" value="claude-sonnet-4-6" />

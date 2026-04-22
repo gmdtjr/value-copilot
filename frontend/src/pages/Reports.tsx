@@ -219,6 +219,113 @@ function DiscoveryReportView({ report }: { report: Report }) {
   )
 }
 
+const BRIEFING_SECTIONS = [
+  { key: 'macro', label: '1. 매크로 환경' },
+  { key: 'portfolio_summary', label: '2. 포트폴리오 브리핑' },
+  { key: 'watchlist', label: '3. 관심 종목' },
+]
+
+function DailyBriefingView({ report }: { report: Report }) {
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    new Set(['macro', 'portfolio_summary', 'watchlist'])
+  )
+
+  function toggle(key: string) {
+    setOpenSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const hasSections = BRIEFING_SECTIONS.some(({ key }) => extractSection(report.content, key))
+  if (!hasSections) return <Markdown content={report.content} />
+
+  return (
+    <div className="space-y-2">
+      {BRIEFING_SECTIONS.map(({ key, label }) => {
+        const text = extractSection(report.content, key)
+        if (!text) return null
+        const isOpen = openSections.has(key)
+        return (
+          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggle(key)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+            >
+              <span className="text-white text-sm font-medium">{label}</span>
+              {isOpen
+                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+              }
+            </button>
+            {isOpen && (
+              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+                <Markdown content={text} />
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const MACRO_SECTIONS = [
+  { key: 'market_overview', label: '1. 시장 환경' },
+  { key: 'macro_factors', label: '2. 매크로 요인' },
+  { key: 'portfolio_implication', label: '3. 포트폴리오 시사점' },
+]
+
+function MacroReportView({ report }: { report: Report }) {
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    new Set(['market_overview', 'macro_factors', 'portfolio_implication'])
+  )
+
+  function toggle(key: string) {
+    setOpenSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const hasSections = MACRO_SECTIONS.some(({ key }) => extractSection(report.content, key))
+
+  if (!hasSections) return <Markdown content={report.content} />
+
+  return (
+    <div className="space-y-2">
+      {MACRO_SECTIONS.map(({ key, label }) => {
+        const text = extractSection(report.content, key)
+        if (!text) return null
+        const isOpen = openSections.has(key)
+        return (
+          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggle(key)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+            >
+              <span className="text-white text-sm font-medium">{label}</span>
+              {isOpen
+                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+              }
+            </button>
+            {isOpen && (
+              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+                <Markdown content={text} />
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function ReportsPage() {
   const navigate = useNavigate()
   const [reports, setReports] = useState<Report[]>([])
@@ -858,6 +965,10 @@ export default function ReportsPage() {
                     ? <DiscoveryReportView report={selected} />
                     : selected.type === 'portfolio_review'
                     ? <PortfolioReviewView report={selected} />
+                    : selected.type === 'macro'
+                    ? <MacroReportView report={selected} />
+                    : selected.type === 'daily_brief'
+                    ? <DailyBriefingView report={selected} />
                     : <Markdown content={selected.content} />
                   }
                 </div>
