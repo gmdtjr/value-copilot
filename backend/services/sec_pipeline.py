@@ -195,6 +195,7 @@ def run_sec_pipeline(filing_refs: list[dict], ticker_id: str, db) -> int:
             logger.warning("Could not resolve main doc from %s", index_url)
             continue
 
+        time.sleep(1)  # EDGAR rate limit 보호
         html = _fetch_text(main_url)
         if not html:
             continue
@@ -208,10 +209,11 @@ def run_sec_pipeline(filing_refs: list[dict], ticker_id: str, db) -> int:
 
         # Summarize with Claude Haiku (cheaper for bulk)
         biz_summary  = _summarize_section(client, biz_text, "business")
-        time.sleep(0.5)
+        time.sleep(1.5)
         risk_summary = _summarize_section(client, risk_text, "risk")
-        time.sleep(0.5)
+        time.sleep(1.5)
         mda_summary  = _summarize_section(client, mda_text, "mda")
+        time.sleep(1.5)  # 다음 filing 전 쿨다운
 
         filing_type = "10-K" if len(period) == 4 else "10-Q"
         row = SecFilingSummary(

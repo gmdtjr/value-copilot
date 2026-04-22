@@ -1,8 +1,36 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Sparkles } from 'lucide-react'
+import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Sparkles, Settings } from 'lucide-react'
 import { api } from '../api'
 import type { Ticker, Market } from '../types'
+
+function PipelineRow({ label, value, tag, tagLabel }: {
+  label: string
+  value: string
+  tag?: 'ok' | 'warn' | 'error'
+  tagLabel?: string
+}) {
+  const tagStyle = tag === 'ok'
+    ? 'bg-emerald-900/60 text-emerald-400'
+    : tag === 'warn'
+    ? 'bg-amber-900/60 text-amber-400'
+    : tag === 'error'
+    ? 'bg-red-900/60 text-red-400'
+    : ''
+  return (
+    <div className="bg-gray-800/30 px-4 py-2.5 flex items-start justify-between gap-3">
+      <span className="text-xs text-gray-400 flex-shrink-0 w-36">{label}</span>
+      <div className="flex-1 flex items-start justify-between gap-2 min-w-0">
+        {value && <span className="text-xs text-gray-300 leading-relaxed">{value}</span>}
+        {tag && tagLabel && (
+          <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${tagStyle}`}>
+            {tagLabel}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const STATUS_BADGE: Record<string, string> = {
   draft: 'bg-yellow-900 text-yellow-200',
@@ -37,6 +65,12 @@ export default function Dashboard() {
   const [syncMsg, setSyncMsg] = useState('')
   const [indicators, setIndicators] = useState<any>(null)
 
+  // Settings state
+  const [showSettings, setShowSettings] = useState(false)
+  const [settings, setSettings] = useState<Record<string, string>>({ us_data_source: 'yfinance' })
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [sysInfo, setSysInfo] = useState<Record<string, boolean>>({})
+
   // Multi-select state
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -53,7 +87,29 @@ export default function Dashboard() {
       .then((r) => r.ok ? r.json() : null)
       .then(setIndicators)
       .catch(() => null)
+    fetch('/api/settings')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setSettings(d) })
+      .catch(() => null)
+    fetch('/api/settings/system-info')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d) setSysInfo(d) })
+      .catch(() => null)
   }, [])
+
+  async function saveSetting(key: string, value: string) {
+    setSavingSettings(true)
+    try {
+      const res = await fetch(`/api/settings/${key}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      })
+      if (res.ok) setSettings(prev => ({ ...prev, [key]: value }))
+    } finally {
+      setSavingSettings(false)
+    }
+  }
 
   function exitSelectMode() {
     setSelectMode(false)
@@ -88,48 +144,59 @@ export default function Dashboard() {
     setBulkRunning(true)
 
     if (action === 'refresh') {
-      // 단일 SSE 스트림에서 순차 처리 — 종목 간 2초 딜레이로 rate limit 보호
-      await new Promise<void>((resolve) => {
-        fetch('/api/tickers/bulk-refresh-stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ticker_ids: ids }),
-        }).then(async (res) => {
-          if (!res.ok || !res.body) {
-            for (const tid of ids)
-              setJobStatuses(prev => ({ ...prev, [tid]: { status: 'error', msg: `HTTP ${res.status}` } }))
-            resolve()
-            return
-          }
-          const reader = res.body.getReader()
-          const dec = new TextDecoder()
-          let finished = false
-          while (!finished) {
-            const { value, done } = await reader.read()
-            if (done) { finished = true; break }
-            const text = dec.decode(value)
-            for (const line of text.split('\n')) {
-              if (!line.startsWith('data: ')) continue
-              try {
-                const evt = JSON.parse(line.slice(6))
-                if (evt.type === 'start')
-                  setJobStatuses(prev => ({ ...prev, [evt.ticker_id]: { status: 'running' } }))
-                else if (evt.type === 'done')
-                  setJobStatuses(prev => ({ ...prev, [evt.ticker_id]: { status: 'done' } }))
-                else if (evt.type === 'ticker_error')
-                  setJobStatuses(prev => ({ ...prev, [evt.ticker_id]: { status: 'error', msg: evt.msg } }))
-                else if (evt.type === 'complete')
-                  finished = true
-              } catch { /* parse error — skip */ }
-            }
-          }
-          resolve()
-        }).catch((err) => {
-          for (const tid of ids)
-            setJobStatuses(prev => ({ ...prev, [tid]: { status: 'error', msg: String(err) } }))
-          resolve()
-        })
+      const res = await fetch('/api/tickers/bulk-refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker_ids: ids }),
       })
+      if (!res.ok) {
+        setJobStatuses(prev => {
+          const next = { ...prev }
+          for (const id of ids) next[id] = { status: 'error', msg: `HTTP ${res.status}` }
+          return next
+        })
+        setBulkRunning(false)
+        return
+      }
+      // 서버에서 백그라운드 처리 — 페이지 닫아도 됨
+      setJobStatuses(prev => {
+        const next = { ...prev }
+        for (const id of ids) next[id] = { status: 'running' }
+        return next
+      })
+      setBulkRunning(false)
+
+      // 15초마다 data-status 폴링 → 완료된 종목 마킹
+      const done = new Set<string>()
+      const maxPolls = ids.length * 8  // 종목당 최대 2분
+      let pollCount = 0
+      const timer = setInterval(async () => {
+        pollCount++
+        const remaining = ids.filter(id => !done.has(id))
+        await Promise.all(remaining.map(async (id) => {
+          try {
+            const r = await fetch(`/api/tickers/${id}/data-status`)
+            if (r.ok) {
+              const d = await r.json()
+              if (d.has_data) {
+                done.add(id)
+                setJobStatuses(prev => ({ ...prev, [id]: { status: 'done' } }))
+              }
+            }
+          } catch { /* ignore */ }
+        }))
+        if (done.size === ids.length || pollCount >= maxPolls) {
+          clearInterval(timer)
+          setJobStatuses(prev => {
+            const next = { ...prev }
+            for (const id of ids)
+              if (next[id]?.status === 'running') next[id] = { status: 'done' }
+            return next
+          })
+          api.getTickers().then(setTickers)
+        }
+      }, 15000)
+      return
     } else {
       // analyze / report: per-ticker 순차 처리
       for (const id of ids) {
@@ -265,6 +332,13 @@ export default function Dashboard() {
           <span className="hidden sm:block text-xs text-gray-500 ml-2">가치투자 AI 코파일럿</span>
         </div>
         <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
+          <button
+            onClick={() => setShowSettings(true)}
+            className="text-gray-400 hover:text-white p-1.5 sm:p-2 rounded-lg transition-colors"
+            title="설정"
+          >
+            <Settings size={16} />
+          </button>
           <button
             onClick={() => navigate('/reports')}
             className="flex items-center gap-1.5 text-gray-400 hover:text-white text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
@@ -434,6 +508,155 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Settings modal */}
+        {showSettings && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-3">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 sticky top-0 bg-gray-900 z-10">
+                <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                  <Settings size={16} className="text-gray-400" />
+                  시스템 파이프라인
+                </h2>
+                <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-gray-300 p-1 rounded">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-6">
+
+                {/* US 주식 */}
+                <section>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🇺🇸 US 주식</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+
+                    {/* 재무 데이터 — 선택 가능 */}
+                    <div className="bg-gray-800/50 px-4 py-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-gray-400">재무 데이터</span>
+                        {savingSettings && <span className="text-xs text-gray-500">저장 중...</span>}
+                      </div>
+                      <div className="flex gap-2">
+                        {[
+                          { value: 'yfinance', label: 'yfinance', desc: '기본 · 안정적' },
+                          { value: 'financialdatasets', label: 'financialdatasets.ai', desc: 'API 키 필요 · 내부자 거래 포함' },
+                        ].map((opt) => (
+                          <label
+                            key={opt.value}
+                            className={`flex-1 flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors text-xs ${
+                              settings.us_data_source === opt.value
+                                ? 'border-emerald-600 bg-emerald-950/40'
+                                : 'border-gray-700 hover:border-gray-600'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              name="us_data_source"
+                              value={opt.value}
+                              checked={settings.us_data_source === opt.value}
+                              onChange={() => saveSetting('us_data_source', opt.value)}
+                              disabled={savingSettings}
+                              className="mt-0.5 accent-emerald-500 flex-shrink-0"
+                            />
+                            <div>
+                              <p className="text-white font-medium">{opt.label}</p>
+                              <p className="text-gray-500 mt-0.5">{opt.desc}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                      {settings.us_data_source === 'financialdatasets' && (
+                        <p className={`text-xs mt-2 ${sysInfo.has_financial_datasets_key ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {sysInfo.has_financial_datasets_key
+                            ? '✓ FINANCIAL_DATASETS_API_KEY 설정됨 · 한도 초과 시 yfinance로 자동 전환'
+                            : '⚠ FINANCIAL_DATASETS_API_KEY 미설정 · yfinance로 자동 전환됩니다'}
+                        </p>
+                      )}
+                    </div>
+
+                    <PipelineRow label="뉴스" value="yfinance (재무 데이터와 통합, 최대 10건)" />
+                    <PipelineRow label="SEC 공시 요약" value="EDGAR submissions API → primary HTML → claude-haiku-4-5" />
+                  </div>
+                </section>
+
+                {/* KR 주식 */}
+                <section>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🇰🇷 KR 주식</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+                    <PipelineRow
+                      label="재무제표"
+                      value="OpenDART fnlttSinglAcntAll (IS/BS/CF 단일 호출, CFS 우선)"
+                      tag={sysInfo.has_opendart_key ? 'ok' : 'warn'}
+                      tagLabel={sysInfo.has_opendart_key ? 'API 키 설정됨' : 'OPENDART_API_KEY 미설정'}
+                    />
+                    <PipelineRow label="시장 지표 (PER/PBR/시총)" value="yfinance — .KS (KOSPI) / .KQ (KOSDAQ) 자동 판별" />
+                    <PipelineRow
+                      label="뉴스"
+                      value="네이버 뉴스 검색 API (최근 10건)"
+                      tag={sysInfo.has_naver_client_id ? 'ok' : 'warn'}
+                      tagLabel={sysInfo.has_naver_client_id ? '설정됨' : 'NAVER_CLIENT_ID 미설정'}
+                    />
+                    <PipelineRow
+                      label="공시"
+                      value="OpenDART list.json — 최근 60일, 모든 공시 유형"
+                      tag={sysInfo.has_opendart_key ? 'ok' : 'warn'}
+                      tagLabel={sysInfo.has_opendart_key ? 'API 키 설정됨' : '미설정'}
+                    />
+                    <PipelineRow
+                      label="내부자 거래"
+                      value="OpenDART majorstock.json — 최근 180일 임원/주요주주 변동"
+                      tag={sysInfo.has_opendart_key ? 'ok' : 'warn'}
+                      tagLabel={sysInfo.has_opendart_key ? 'API 키 설정됨' : '미설정'}
+                    />
+                    <PipelineRow label="정기공시 요약" value="DART main.do TOC → viewer.do 섹션 HTML → claude-haiku-4-5" />
+                  </div>
+                </section>
+
+                {/* KIS */}
+                <section>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">💼 포트폴리오</p>
+                  <div className="rounded-lg overflow-hidden border border-gray-800">
+                    <PipelineRow
+                      label="KIS 동기화"
+                      value="한국투자증권 API — 5개 계좌 잔고 조회"
+                      tag={sysInfo.has_kis_key ? 'ok' : 'warn'}
+                      tagLabel={sysInfo.has_kis_key ? 'API 키 설정됨' : 'KIS_APP_KEY 미설정'}
+                    />
+                  </div>
+                </section>
+
+                {/* AI 모델 */}
+                <section>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🤖 AI 모델</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+                    <PipelineRow
+                      label="Anthropic API"
+                      value=""
+                      tag={sysInfo.has_anthropic_key ? 'ok' : 'error'}
+                      tagLabel={sysInfo.has_anthropic_key ? 'API 키 설정됨' : 'ANTHROPIC_API_KEY 미설정'}
+                    />
+                    <PipelineRow label="공시 요약 (SEC / DART)" value="claude-haiku-4-5-20251001 · max_tokens 600" />
+                    <PipelineRow label="Thesis 생성 / 리포트" value="claude-sonnet-4-6 · max_tokens 8192" />
+                    <PipelineRow label="Break Monitor / 브리핑" value="claude-sonnet-4-6" />
+                    <PipelineRow label="종목 탐색 / 포트폴리오 점검" value="claude-sonnet-4-6 · SSE 스트리밍" />
+                  </div>
+                </section>
+
+                {/* 스케줄러 */}
+                <section>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">⏰ 자동 스케줄</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+                    <PipelineRow label="06:00 KST" value="light_refresh — news / metrics / insider_trades 갱신" />
+                    <PipelineRow label="07:00 KST" value="daily_briefing — 뉴스 + 포트폴리오 + 매크로 브리핑" />
+                    <PipelineRow label="08:00 KST" value="break_monitor — confirmed 종목 thesis 이탈 감지" />
+                  </div>
+                </section>
+
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Market Indicators */}
         {indicators && (
           <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -486,14 +709,19 @@ export default function Dashboard() {
         {showProgress && bulkAction && (
           <div className="mb-6 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-              <div className="flex items-center gap-2">
-                {bulkRunning && <RefreshCw size={13} className="animate-spin text-blue-400" />}
+              <div className="flex items-center gap-2 flex-wrap">
+                {Object.values(jobStatuses).some(j => j.status === 'running') && (
+                  <RefreshCw size={13} className="animate-spin text-blue-400" />
+                )}
                 <span className="text-sm font-medium text-white">
-                  {ACTION_LABEL[bulkAction]} {bulkRunning ? '진행 중...' : '완료'}
+                  {ACTION_LABEL[bulkAction]}
                 </span>
                 <span className="text-xs text-gray-500">
-                  ({Object.values(jobStatuses).filter(j => j.status === 'done').length}/{jobTickerIds.length})
+                  ({Object.values(jobStatuses).filter(j => j.status === 'done').length}/{jobTickerIds.length} 완료)
                 </span>
+                {bulkAction === 'refresh' && Object.values(jobStatuses).some(j => j.status === 'running') && (
+                  <span className="text-xs text-gray-500">· 페이지 닫아도 됩니다</span>
+                )}
               </div>
               {!bulkRunning && (
                 <button

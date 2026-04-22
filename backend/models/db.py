@@ -93,9 +93,22 @@ class Report(Base):
     ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id"), nullable=True)
     type = Column(SAEnum(ReportTypeEnum), nullable=False)
     content = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     ticker = relationship("Ticker", back_populates="reports")
+    comments = relationship("ReportComment", back_populates="report", cascade="all, delete-orphan", order_by="ReportComment.created_at")
+
+
+class ReportComment(Base):
+    __tablename__ = "report_comments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    report = relationship("Report", back_populates="comments")
 
 
 class Portfolio(Base):
@@ -140,3 +153,12 @@ class SecFilingSummary(Base):
     risk_summary = Column(Text, nullable=True)         # Item 1A 요약
     mda_summary = Column(Text, nullable=True)          # Item 7 요약
     summarized_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Settings(Base):
+    """사용자 설정 key-value 스토어."""
+    __tablename__ = "settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(String(500), nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

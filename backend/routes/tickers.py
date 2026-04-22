@@ -446,32 +446,25 @@ def refresh_data(ticker_id: str, background_tasks: BackgroundTasks, db: Session 
     return {"message": f"{ticker.symbol} 데이터 새로고침 시작됨"}
 
 
-@router.post("/bulk-refresh-stream")
-def bulk_refresh_stream(body: BulkRefreshBody, db: Session = Depends(get_db)):
-    """선택 종목 데이터 수집을 SSE 스트림으로 순차 실행. 종목 간 rate limit 보호."""
+@router.post("/bulk-refresh", status_code=202)
+def bulk_refresh(body: BulkRefreshBody, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """선택 종목 데이터 수집을 백그라운드에서 순차 실행. 종목 간 2초 딜레이로 rate limit 보호."""
     tickers = db.query(Ticker).filter(Ticker.id.in_(body.ticker_ids)).all()
     ticker_map = {str(t.id): t for t in tickers}
-    # 요청 순서 유지
-    ordered = [ticker_map[tid] for tid in body.ticker_ids if tid in ticker_map]
+    jobs = [(str(t.id), t.symbol, t.market.value, t.name)
+            for tid in body.ticker_ids if (t := ticker_map.get(tid)) is not None]
+    if not jobs:
+        return {"message": "종목을 찾을 수 없습니다.", "count": 0}
+    background_tasks.add_task(_run_bulk_refresh, jobs)
+    return {"message": f"{len(jobs)}개 종목 데이터 수집 시작됨", "count": len(jobs)}
 
-    def event_stream():
-        for i, ticker in enumerate(ordered):
-            if i > 0:
-                time.sleep(2)  # 종목 간 딜레이 — API rate limit 보호
-            tid = str(ticker.id)
-            yield f"data: {json.dumps({'type': 'start', 'ticker_id': tid, 'symbol': ticker.symbol})}\n\n"
-            ok = _run_refresh_data(tid, ticker.symbol, ticker.market.value, ticker.name)
-            if ok:
-                yield f"data: {json.dumps({'type': 'done', 'ticker_id': tid})}\n\n"
-            else:
-                yield f"data: {json.dumps({'type': 'ticker_error', 'ticker_id': tid})}\n\n"
-        yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+def _run_bulk_refresh(jobs: list[tuple]):
+    for i, (ticker_id, symbol, market, name) in enumerate(jobs):
+        if i > 0:
+            time.sleep(2)
+        logger.info("Bulk refresh: %s (%d/%d)", symbol, i + 1, len(jobs))
+        _run_refresh_data(ticker_id, symbol, market, name)
 
 
 @router.post("/{ticker_id}/report", status_code=202)

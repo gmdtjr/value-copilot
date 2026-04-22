@@ -195,26 +195,27 @@ def run_dart_pipeline(filing_refs: list[dict], ticker_id: str, db) -> int:
 
         # 2. 섹션별 텍스트 취득
         biz_text = _get_section_text(toc, "business")
-        time.sleep(0.3)
+        time.sleep(1)
 
         # 위험요소: 별도 섹션 없으면 사업의 내용에서 추출
         risk_text = _get_section_text(toc, "risk")
         if not risk_text and biz_text:
             risk_text = _extract_risk_from_business(biz_text)
-        time.sleep(0.3)
+        time.sleep(1)
 
         mda_text = _get_section_text(toc, "mda")
-        time.sleep(0.3)
+        time.sleep(1)
 
         logger.info("DART sections: biz=%d risk=%d mda=%d chars for %s",
                     len(biz_text), len(risk_text), len(mda_text), rcept_no)
 
         # 3. Claude Haiku 요약
         biz_summary  = _summarize(client, biz_text, "business")
-        time.sleep(0.5)
+        time.sleep(1.5)
         risk_summary = _summarize(client, risk_text, "risk")
-        time.sleep(0.5)
+        time.sleep(1.5)
         mda_summary  = _summarize(client, mda_text, "mda")
+        time.sleep(1.5)  # 다음 filing 전 쿨다운
 
         # 4. DB 저장
         row = SecFilingSummary(

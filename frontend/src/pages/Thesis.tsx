@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api'
 import { fmtKST } from '../utils/date'
+import { Markdown } from '../components/Markdown'
 import type { Thesis, Ticker, FinancialData, SecSummary } from '../types'
 
 type DataStatus = {
@@ -56,11 +57,7 @@ function ReportAccordion({ report }: { report: TickerReport }) {
   const [open, setOpen] = useState<Set<string>>(new Set(['business_overview', 'investment_conclusion']))
 
   if (!sections || !hasSections) {
-    return (
-      <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
-        {report.content}
-      </div>
-    )
+    return <Markdown content={report.content} />
   }
   return (
     <div className="space-y-2">
@@ -79,7 +76,7 @@ function ReportAccordion({ report }: { report: TickerReport }) {
             </button>
             {isOpen && (
               <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
-                <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">{text}</div>
+                <Markdown content={text} />
               </div>
             )}
           </div>
@@ -249,7 +246,7 @@ function SecSummaryCard({ s }: { s: SecSummary }) {
           {subsections.map(({ label, text }) => text ? (
             <div key={label} className="px-4 py-3">
               <p className="text-xs font-medium text-gray-400 mb-2">{label}</p>
-              <p className="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap">{text}</p>
+              <Markdown content={text} />
             </div>
           ) : null)}
         </div>
@@ -807,8 +804,8 @@ export default function ThesisPage() {
                   </button>
                   {isOpen && (
                     <div className="px-5 pb-5 border-t border-gray-800">
-                      <div className="pt-4 text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
-                        {content}
+                      <div className="pt-4">
+                        <Markdown content={content} />
                       </div>
                     </div>
                   )}

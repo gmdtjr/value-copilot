@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2 } from 'lucide-react'
+import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff } from 'lucide-react'
 import { fmtKST } from '../utils/date'
+import { Markdown } from '../components/Markdown'
+import type { ReportComment } from '../types'
 
 interface Report {
   id: string
@@ -10,6 +12,8 @@ interface Report {
   type: string
   content: string
   created_at: string
+  is_read: boolean
+  comment_count: number
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -82,12 +86,7 @@ function DeepReportView({ report }: { report: Report }) {
   const hasSections = DEEP_SECTIONS.some(({ key }) => extractSection(report.content, key))
 
   if (!hasSections) {
-    // 구 형식 보고서는 plain text로 표시
-    return (
-      <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap font-mono">
-        {report.content}
-      </div>
-    )
+    return <Markdown content={report.content} />
   }
 
   return (
@@ -110,9 +109,7 @@ function DeepReportView({ report }: { report: Report }) {
             </button>
             {isOpen && (
               <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
-                <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
-                  {text}
-                </div>
+                <Markdown content={text} />
               </div>
             )}
           </div>
@@ -139,11 +136,7 @@ function PortfolioReviewView({ report }: { report: Report }) {
   const hasSections = PORTFOLIO_REVIEW_SECTIONS.some(({ key }) => extractSection(report.content, key))
 
   if (!hasSections) {
-    return (
-      <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap font-mono">
-        {report.content}
-      </div>
-    )
+    return <Markdown content={report.content} />
   }
 
   return (
@@ -166,9 +159,7 @@ function PortfolioReviewView({ report }: { report: Report }) {
             </button>
             {isOpen && (
               <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
-                <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
-                  {text}
-                </div>
+                <Markdown content={text} />
               </div>
             )}
           </div>
@@ -195,11 +186,7 @@ function DiscoveryReportView({ report }: { report: Report }) {
   const hasSections = DISCOVERY_SECTIONS.some(({ key }) => extractSection(report.content, key))
 
   if (!hasSections) {
-    return (
-      <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap font-mono">
-        {report.content}
-      </div>
-    )
+    return <Markdown content={report.content} />
   }
 
   return (
@@ -222,9 +209,7 @@ function DiscoveryReportView({ report }: { report: Report }) {
             </button>
             {isOpen && (
               <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
-                <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
-                  {text}
-                </div>
+                <Markdown content={text} />
               </div>
             )}
           </div>
@@ -252,6 +237,20 @@ export default function ReportsPage() {
   const [showPortfolioStream, setShowPortfolioStream] = useState(false)
   const portfolioReviewRef = useRef<HTMLDivElement>(null)
 
+  // Filter & multi-select
+  const [filterType, setFilterType] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deletingBulk, setDeletingBulk] = useState(false)
+
+  const filteredReports = filterType ? reports.filter(r => r.type === filterType) : reports
+
+  // Comments state
+  const [comments, setComments] = useState<ReportComment[]>([])
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [commentText, setCommentText] = useState('')
+  const [submittingComment, setSubmittingComment] = useState(false)
+  const [showComments, setShowComments] = useState(false)
+
   async function fetchReports() {
     setLoading(true)
     try {
@@ -263,6 +262,139 @@ export default function ReportsPage() {
   }
 
   useEffect(() => { fetchReports() }, [])
+
+  async function selectReport(r: Report) {
+    setSelected(r)
+    setMobileShowDetail(true)
+    setCommentText('')
+    setShowComments(false)
+    setComments([])
+    // 읽음 처리
+    if (!r.is_read) {
+      const res = await fetch(`/api/reports/${r.id}/read`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_read: true }),
+      })
+      if (res.ok) {
+        setReports(prev => prev.map(x => x.id === r.id ? { ...x, is_read: true } : x))
+        setSelected(prev => prev?.id === r.id ? { ...prev, is_read: true } : prev)
+      }
+    }
+  }
+
+  async function toggleRead(r: Report, e: React.MouseEvent) {
+    e.stopPropagation()
+    const next = !r.is_read
+    const res = await fetch(`/api/reports/${r.id}/read`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_read: next }),
+    })
+    if (res.ok) {
+      setReports(prev => prev.map(x => x.id === r.id ? { ...x, is_read: next } : x))
+      setSelected(prev => prev?.id === r.id ? { ...prev, is_read: next } : prev)
+    }
+  }
+
+  async function deleteReport(r: Report) {
+    if (!confirm(`"${TYPE_LABEL[r.type] ?? r.type}${r.ticker_symbol ? ` — ${r.ticker_symbol}` : ''}" 보고서를 삭제할까요? 코멘트도 함께 삭제됩니다.`)) return
+    const res = await fetch(`/api/reports/${r.id}`, { method: 'DELETE' })
+    if (res.ok || res.status === 204) {
+      const next = reports.filter(x => x.id !== r.id)
+      setReports(next)
+      if (selected?.id === r.id) {
+        setSelected(next[0] ?? null)
+        if (next[0]) selectReport(next[0])
+        else setMobileShowDetail(false)
+      }
+    }
+  }
+
+  function toggleSelect(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === filteredReports.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredReports.map(r => r.id)))
+    }
+  }
+
+  async function deleteSelected() {
+    if (selectedIds.size === 0) return
+    if (!confirm(`선택한 보고서 ${selectedIds.size}개를 삭제할까요? 코멘트도 함께 삭제됩니다.`)) return
+    setDeletingBulk(true)
+    try {
+      await Promise.all(
+        [...selectedIds].map(id => fetch(`/api/reports/${id}`, { method: 'DELETE' }))
+      )
+      const remaining = reports.filter(r => !selectedIds.has(r.id))
+      setReports(remaining)
+      setSelectedIds(new Set())
+      if (selected && selectedIds.has(selected.id)) {
+        const next = remaining[0] ?? null
+        setSelected(next)
+        if (!next) setMobileShowDetail(false)
+      }
+    } finally {
+      setDeletingBulk(false)
+    }
+  }
+
+  async function loadComments(reportId: string) {
+    setCommentsLoading(true)
+    try {
+      const res = await fetch(`/api/reports/${reportId}/comments`)
+      if (res.ok) setComments(await res.json())
+    } finally {
+      setCommentsLoading(false)
+    }
+  }
+
+  function toggleComments() {
+    if (!showComments && selected) loadComments(selected.id)
+    setShowComments(v => !v)
+  }
+
+  async function submitComment() {
+    if (!commentText.trim() || !selected) return
+    setSubmittingComment(true)
+    try {
+      const res = await fetch(`/api/reports/${selected.id}/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: commentText.trim() }),
+      })
+      if (res.ok) {
+        const c: ReportComment = await res.json()
+        setComments(prev => [...prev, c])
+        setCommentText('')
+        setReports(prev => prev.map(x => x.id === selected.id ? { ...x, comment_count: x.comment_count + 1 } : x))
+        setSelected(prev => prev?.id === selected.id ? { ...prev, comment_count: prev.comment_count + 1 } : prev)
+      }
+    } finally {
+      setSubmittingComment(false)
+    }
+  }
+
+  async function deleteComment(commentId: string) {
+    if (!selected) return
+    const res = await fetch(`/api/reports/${selected.id}/comments/${commentId}`, { method: 'DELETE' })
+    if (res.ok || res.status === 204) {
+      setComments(prev => prev.filter(c => c.id !== commentId))
+      setReports(prev => prev.map(x => x.id === selected.id ? { ...x, comment_count: Math.max(0, x.comment_count - 1) } : x))
+      setSelected(prev => prev?.id === selected.id ? { ...prev, comment_count: Math.max(0, prev.comment_count - 1) } : prev)
+    }
+  }
 
   async function triggerBriefing() {
     setTriggering(true)
@@ -550,50 +682,143 @@ export default function ReportsPage() {
         {/* 모바일/태블릿(<1024px): 목록 또는 본문 전환. 데스크탑(1024px+): 사이드바 레이아웃 */}
         <div className="lg:flex lg:gap-6">
           {/* 목록 — lg 미만에서는 detail 볼 때 숨김 */}
-          <div className={`lg:w-72 lg:flex-shrink-0 lg:block space-y-2 ${mobileShowDetail ? 'hidden' : 'block'}`}>
+          <div className={`lg:w-72 lg:flex-shrink-0 lg:block ${mobileShowDetail ? 'hidden' : 'block'}`}>
+            {/* 종류 필터 탭 */}
+            {!loading && reports.length > 0 && (
+              <div className="flex gap-1 overflow-x-auto pb-2 mb-3 scrollbar-hide">
+                <button
+                  onClick={() => { setFilterType(null); setSelectedIds(new Set()) }}
+                  className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    filterType === null
+                      ? 'bg-gray-700 border-gray-600 text-white'
+                      : 'bg-transparent border-gray-700 text-gray-400 hover:text-gray-300'
+                  }`}
+                >
+                  전체 {reports.length}
+                </button>
+                {Object.entries(TYPE_LABEL).map(([type, label]) => {
+                  const count = reports.filter(r => r.type === type).length
+                  if (!count) return null
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => { setFilterType(type); setSelectedIds(new Set()) }}
+                      className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                        filterType === type
+                          ? `border-transparent text-white ${TYPE_COLOR[type]}`
+                          : 'bg-transparent border-gray-700 text-gray-400 hover:text-gray-300'
+                      }`}
+                    >
+                      {label} {count}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* 멀티셀렉트 액션 바 */}
+            {filteredReports.length > 0 && (
+              <div className="flex items-center gap-2 mb-2 px-1">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.size > 0 && selectedIds.size === filteredReports.length}
+                  ref={(el: HTMLInputElement | null) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < filteredReports.length }}
+                  onChange={toggleSelectAll}
+                  className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 accent-blue-500 cursor-pointer"
+                />
+                {selectedIds.size > 0 ? (
+                  <>
+                    <span className="text-xs text-gray-400 flex-1">{selectedIds.size}개 선택됨</span>
+                    <button
+                      onClick={deleteSelected}
+                      disabled={deletingBulk}
+                      className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
+                    >
+                      {deletingBulk ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                      삭제
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-xs text-gray-600">전체선택</span>
+                )}
+              </div>
+            )}
+
             {loading && <p className="text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
             {!loading && reports.length === 0 && (
               <p className="text-gray-600 text-sm text-center py-8">보고서가 없습니다.</p>
             )}
-            {reports.map((r, idx) => {
-              const isLatest = idx === reports.findIndex(
-                (x) => x.ticker_id === r.ticker_id && x.type === r.type
-              )
-              return (
-                <button
-                  key={r.id}
-                  onClick={() => { setSelected(r); setMobileShowDetail(true) }}
-                  className={`w-full text-left px-4 py-3 rounded-xl border transition-colors ${
-                    selected?.id === r.id
-                      ? 'bg-gray-800 border-gray-600'
-                      : 'bg-gray-900 border-gray-800 hover:border-gray-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 mb-1 flex-wrap">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLOR[r.type] ?? 'bg-gray-700 text-gray-300'}`}>
-                      {TYPE_LABEL[r.type] ?? r.type}
-                    </span>
-                    {r.ticker_symbol && (
-                      <span className="text-xs font-semibold text-white">{r.ticker_symbol}</span>
-                    )}
-                    {isLatest && (
-                      <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-300">최신</span>
-                    )}
+            {!loading && filteredReports.length === 0 && reports.length > 0 && (
+              <p className="text-gray-600 text-sm text-center py-6">해당 종류의 보고서가 없습니다.</p>
+            )}
+            <div className="space-y-2">
+              {filteredReports.map((r) => {
+                const isLatest = reports.findIndex(x => x.ticker_id === r.ticker_id && x.type === r.type) === reports.indexOf(r)
+                const isSelected = selectedIds.has(r.id)
+                return (
+                  <div
+                    key={r.id}
+                    className={`flex items-stretch rounded-xl border transition-colors ${
+                      selected?.id === r.id
+                        ? 'bg-gray-800 border-gray-600'
+                        : isSelected
+                        ? 'bg-gray-800/60 border-gray-700'
+                        : 'bg-gray-900 border-gray-800 hover:border-gray-700'
+                    }`}
+                  >
+                    {/* 체크박스 */}
+                    <div
+                      className="flex items-center pl-3 pr-1 cursor-pointer"
+                      onClick={(e) => toggleSelect(r.id, e)}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 accent-blue-500 pointer-events-none"
+                      />
+                    </div>
+                    {/* 내용 */}
+                    <button
+                      className="flex-1 text-left px-3 py-3 min-w-0"
+                      onClick={() => selectReport(r)}
+                    >
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        {!r.is_read && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" title="읽지 않음" />
+                        )}
+                        {!filterType && (
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLOR[r.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                            {TYPE_LABEL[r.type] ?? r.type}
+                          </span>
+                        )}
+                        {r.ticker_symbol && (
+                          <span className="text-xs font-semibold text-white">{r.ticker_symbol}</span>
+                        )}
+                        {isLatest && (
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-300">최신</span>
+                        )}
+                        {r.comment_count > 0 && (
+                          <span className="ml-auto flex items-center gap-0.5 text-xs text-gray-500">
+                            <MessageSquare size={10} />
+                            {r.comment_count}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500">{fmtKST(r.created_at)}</p>
+                    </button>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    {fmtKST(r.created_at)}
-                  </p>
-                </button>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
 
           {/* 본문 — lg 미만에서는 목록 볼 때 숨김 */}
           <div className={`lg:flex-1 lg:min-w-0 lg:block ${mobileShowDetail ? 'block' : 'hidden'}`}>
             {selected ? (
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-6">
-                <div className="flex items-center gap-3 mb-4 sm:mb-5 flex-wrap">
-                  {/* 모바일/태블릿 뒤로가기 버튼 */}
+              <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                {/* 상세 헤더 */}
+                <div className="flex items-center gap-2 px-4 sm:px-6 py-4 border-b border-gray-800 flex-wrap">
                   <button
                     onClick={() => setMobileShowDetail(false)}
                     className="lg:hidden text-gray-400 hover:text-white transition-colors flex-shrink-0"
@@ -606,23 +831,101 @@ export default function ReportsPage() {
                   {selected.ticker_symbol && (
                     <span className="text-sm font-bold text-white">{selected.ticker_symbol}</span>
                   )}
-                  <span className="text-xs text-gray-500 ml-auto">
-                    {fmtKST(selected.created_at)}
-                  </span>
+                  <span className="text-xs text-gray-500">{fmtKST(selected.created_at)}</span>
+                  <div className="ml-auto flex items-center gap-1">
+                    <button
+                      onClick={(e) => toggleRead(selected, e)}
+                      title={selected.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}
+                      className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 transition-colors"
+                    >
+                      {selected.is_read ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                    <button
+                      onClick={() => deleteReport(selected)}
+                      title="보고서 삭제"
+                      className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
 
-                {selected.type === 'analysis'
-                  ? <DeepReportView report={selected} />
-                  : selected.type === 'discovery'
-                  ? <DiscoveryReportView report={selected} />
-                  : selected.type === 'portfolio_review'
-                  ? <PortfolioReviewView report={selected} />
-                  : (
-                    <div className="text-gray-300 text-sm leading-relaxed whitespace-pre-wrap">
-                      {selected.content}
+                {/* 보고서 본문 */}
+                <div className="p-4 sm:p-6">
+                  {selected.type === 'analysis'
+                    ? <DeepReportView report={selected} />
+                    : selected.type === 'discovery'
+                    ? <DiscoveryReportView report={selected} />
+                    : selected.type === 'portfolio_review'
+                    ? <PortfolioReviewView report={selected} />
+                    : <Markdown content={selected.content} />
+                  }
+                </div>
+
+                {/* 코멘트 섹션 */}
+                <div className="border-t border-gray-800">
+                  <button
+                    onClick={toggleComments}
+                    className="w-full flex items-center gap-2 px-4 sm:px-6 py-3 text-sm text-gray-400 hover:text-gray-300 hover:bg-gray-800/30 transition-colors"
+                  >
+                    <MessageSquare size={14} />
+                    <span>코멘트 {selected.comment_count > 0 ? `(${selected.comment_count})` : ''}</span>
+                    {showComments
+                      ? <ChevronUp size={13} className="ml-auto" />
+                      : <ChevronDown size={13} className="ml-auto" />
+                    }
+                  </button>
+
+                  {showComments && (
+                    <div className="px-4 sm:px-6 pb-5 space-y-4">
+                      {/* 기존 코멘트 */}
+                      {commentsLoading ? (
+                        <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
+                          <Loader2 size={13} className="animate-spin" /> 불러오는 중...
+                        </div>
+                      ) : comments.length > 0 ? (
+                        <div className="space-y-2">
+                          {comments.map(c => (
+                            <div key={c.id} className="group bg-gray-800/50 rounded-lg px-4 py-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-sm text-gray-200 leading-relaxed flex-1">{c.content}</p>
+                                <button
+                                  onClick={() => deleteComment(c.id)}
+                                  className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all flex-shrink-0 mt-0.5"
+                                >
+                                  <X size={13} />
+                                </button>
+                              </div>
+                              <p className="text-xs text-gray-600 mt-1.5">{fmtKST(c.created_at)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-600 py-1">아직 코멘트가 없습니다.</p>
+                      )}
+
+                      {/* 코멘트 입력 */}
+                      <div className="flex gap-2">
+                        <textarea
+                          value={commentText}
+                          onChange={e => setCommentText(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitComment() }}
+                          placeholder="투자 인사이트, 후속 관찰 사항... (⌘Enter로 저장)"
+                          rows={2}
+                          disabled={submittingComment}
+                          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-gray-500 disabled:opacity-50"
+                        />
+                        <button
+                          onClick={submitComment}
+                          disabled={submittingComment || !commentText.trim()}
+                          className="flex-shrink-0 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-white px-3 rounded-lg transition-colors"
+                        >
+                          {submittingComment ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                        </button>
+                      </div>
                     </div>
-                  )
-                }
+                  )}
+                </div>
               </div>
             ) : (
               <div className="hidden lg:flex items-center justify-center h-64 text-gray-600">

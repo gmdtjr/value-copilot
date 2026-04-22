@@ -1,12 +1,13 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models.db import get_db, Report, Ticker, Portfolio, Thesis, FinancialCache, ReportTypeEnum, SessionLocal, TickerStatusEnum, ThesisStatusEnum
+from models.db import get_db, Report, ReportComment, Ticker, Portfolio, Thesis, FinancialCache, ReportTypeEnum, SessionLocal, TickerStatusEnum, ThesisStatusEnum
 from services.scheduler import run_daily_briefing
 from services.agent import generate_macro_report, generate_discovery_stream, generate_portfolio_review_stream
 from services.market_data import get_market_indicators
@@ -19,6 +20,14 @@ class DiscoveryRequest(BaseModel):
     idea: str
 
 
+class MarkReadBody(BaseModel):
+    is_read: bool
+
+
+class CommentBody(BaseModel):
+    content: str
+
+
 class ReportResponse(BaseModel):
     id: str
     ticker_id: Optional[str]
@@ -26,10 +35,19 @@ class ReportResponse(BaseModel):
     type: str
     content: str
     created_at: str
+    is_read: bool
+    comment_count: int
+
+
+class CommentResponse(BaseModel):
+    id: str
+    report_id: str
+    content: str
+    created_at: str
 
 
 @router.get("", response_model=list[ReportResponse])
-def list_reports(db: Session = Depends(get_db), limit: int = 20):
+def list_reports(db: Session = Depends(get_db), limit: int = 50):
     reports = (
         db.query(Report)
         .order_by(Report.created_at.desc())
@@ -38,6 +56,15 @@ def list_reports(db: Session = Depends(get_db), limit: int = 20):
     )
     ticker_ids = [r.ticker_id for r in reports if r.ticker_id]
     tickers = {t.id: t.symbol for t in db.query(Ticker).filter(Ticker.id.in_(ticker_ids)).all()}
+
+    report_ids = [r.id for r in reports]
+    comment_counts = dict(
+        db.query(ReportComment.report_id, func.count(ReportComment.id))
+        .filter(ReportComment.report_id.in_(report_ids))
+        .group_by(ReportComment.report_id)
+        .all()
+    ) if report_ids else {}
+
     return [
         ReportResponse(
             id=str(r.id),
@@ -46,9 +73,80 @@ def list_reports(db: Session = Depends(get_db), limit: int = 20):
             type=r.type.value,
             content=r.content,
             created_at=r.created_at.isoformat(),
+            is_read=r.is_read,
+            comment_count=comment_counts.get(r.id, 0),
         )
         for r in reports
     ]
+
+
+@router.delete("/{report_id}", status_code=204)
+def delete_report(report_id: str, db: Session = Depends(get_db)):
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다")
+    db.delete(report)
+    db.commit()
+
+
+@router.patch("/{report_id}/read", response_model=ReportResponse)
+def mark_read(report_id: str, body: MarkReadBody, db: Session = Depends(get_db)):
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다")
+    report.is_read = body.is_read
+    db.commit()
+    ticker_symbol = report.ticker.symbol if report.ticker_id and report.ticker else None
+    comment_count = db.query(func.count(ReportComment.id)).filter(ReportComment.report_id == report.id).scalar()
+    return ReportResponse(
+        id=str(report.id),
+        ticker_id=str(report.ticker_id) if report.ticker_id else None,
+        ticker_symbol=ticker_symbol,
+        type=report.type.value,
+        content=report.content,
+        created_at=report.created_at.isoformat(),
+        is_read=report.is_read,
+        comment_count=comment_count,
+    )
+
+
+@router.get("/{report_id}/comments", response_model=list[CommentResponse])
+def get_comments(report_id: str, db: Session = Depends(get_db)):
+    comments = (
+        db.query(ReportComment)
+        .filter(ReportComment.report_id == report_id)
+        .order_by(ReportComment.created_at.asc())
+        .all()
+    )
+    return [
+        CommentResponse(id=str(c.id), report_id=str(c.report_id), content=c.content, created_at=c.created_at.isoformat())
+        for c in comments
+    ]
+
+
+@router.post("/{report_id}/comments", status_code=201, response_model=CommentResponse)
+def add_comment(report_id: str, body: CommentBody, db: Session = Depends(get_db)):
+    if not body.content.strip():
+        raise HTTPException(status_code=400, detail="코멘트 내용을 입력하세요")
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="보고서를 찾을 수 없습니다")
+    comment = ReportComment(report_id=report.id, content=body.content.strip())
+    db.add(comment)
+    db.commit()
+    return CommentResponse(id=str(comment.id), report_id=str(comment.report_id), content=comment.content, created_at=comment.created_at.isoformat())
+
+
+@router.delete("/{report_id}/comments/{comment_id}", status_code=204)
+def delete_comment(report_id: str, comment_id: str, db: Session = Depends(get_db)):
+    comment = db.query(ReportComment).filter(
+        ReportComment.id == comment_id,
+        ReportComment.report_id == report_id,
+    ).first()
+    if not comment:
+        raise HTTPException(status_code=404, detail="코멘트를 찾을 수 없습니다")
+    db.delete(comment)
+    db.commit()
 
 
 @router.post("/daily-briefing/trigger", status_code=202)

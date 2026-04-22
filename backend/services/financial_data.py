@@ -10,6 +10,7 @@ financialdatasets.ai API 래퍼 + PostgreSQL 캐시 레이어.
 """
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -27,6 +28,7 @@ _TTL: dict[str, timedelta] = {
     "naver_news":     timedelta(hours=24),
     "insider_trades": timedelta(days=3),
     "facts":          timedelta(days=30),
+    "yfinance_data":  timedelta(hours=24),  # US yfinance 통합 캐시
 }
 
 
@@ -251,7 +253,118 @@ def _get_edgar_filing_refs(ticker: str) -> list:
         return []
 
 
-# ── yfinance Fallback (financialdatasets.ai 402 시 자동 전환) ────────────────
+# ── financialdatasets.ai US fetcher ──────────────────────────────────────────
+
+def _fetch_us_financialdatasets(ticker: str, ticker_id: str, db) -> dict:
+    """financialdatasets.ai로 US 종목 재무 데이터 수집."""
+    income_data   = _fetch_cached(db, ticker_id, ticker, "income", _api_income)
+    balance_data  = _fetch_cached(db, ticker_id, ticker, "balance", _api_balance)
+    cashflow_data = _fetch_cached(db, ticker_id, ticker, "cashflow", _api_cashflow)
+    metrics_data  = _fetch_cached(db, ticker_id, ticker, "metrics", _api_metrics)
+    news_data     = _fetch_cached(db, ticker_id, ticker, "news", _api_news)
+    insider_data  = _fetch_cached(db, ticker_id, ticker, "insider_trades", _api_insider_trades)
+
+    for d in [income_data, balance_data, cashflow_data, metrics_data, news_data, insider_data]:
+        if d is _QUOTA_EXCEEDED:
+            logger.warning("financialdatasets quota exceeded for %s", ticker)
+            return {"has_data": False}
+
+    # Income
+    income_rows = []
+    stmts = income_data or []
+    for i, s in enumerate(stmts[:5]):
+        rev = s.get('revenue')
+        gp  = s.get('gross_profit')
+        op  = s.get('operating_income')
+        ni  = s.get('net_income')
+        prev_rev = stmts[i + 1].get('revenue') if i + 1 < len(stmts) else None
+        income_rows.append(
+            f"  {s.get('report_period','?')} | Revenue {_B(rev)} ({_yoy(rev, prev_rev)})"
+            f" | Gross {_B(gp)} ({_pct(gp / rev if gp and rev else None)} margin)"
+            f" | OpInc {_B(op)} | NetInc {_B(ni)}"
+        )
+
+    # Cash flow
+    cf_rows = []
+    for s in (cashflow_data or [])[:5]:
+        ocf   = s.get('operating_cash_flow')
+        capex = s.get('capital_expenditure')
+        fcf   = s.get('free_cash_flow')
+        cf_rows.append(
+            f"  {s.get('report_period','?')} | OCF {_B(ocf)}"
+            f" | Capex {_B(abs(capex) if capex else None)}"
+            f" | FCF {_B(fcf)}"
+        )
+
+    # Balance sheet
+    bs_rows = []
+    for s in (balance_data or [])[:5]:
+        assets   = s.get('total_assets')
+        cash     = s.get('cash_and_equivalents')
+        debt     = s.get('total_debt')
+        equity   = s.get('shareholders_equity')
+        net_debt = (debt or 0) - (cash or 0)
+        bs_rows.append(
+            f"  {s.get('report_period','?')} | Assets {_B(assets)} | Cash {_B(cash)}"
+            f" | TotalDebt {_B(debt)} | Equity {_B(equity)} | Net Debt {_B(net_debt)}"
+        )
+
+    # Metrics
+    km = (metrics_data or [{}])[0] if metrics_data else {}
+    mktcap = km.get('market_capitalization')
+    key_metrics_text = f"""
+  Valuation   : Market Cap {_B(mktcap)} | EV {_B(km.get('enterprise_value'))}
+                P/E {_x(km.get('price_to_earnings_ratio'))} | P/B {_x(km.get('price_to_book_ratio'))}
+                P/S {_x(km.get('price_to_sales_ratio'))} | EV/EBITDA {_x(km.get('enterprise_value_to_ebitda_ratio'))}
+                FCF Yield {_pct(km.get('free_cash_flow_yield'))}
+  Profitability: Gross {_pct(km.get('gross_margin'))} | Operating {_pct(km.get('operating_margin'))} | Net {_pct(km.get('net_profit_margin'))}
+  Returns     : ROE {_pct(km.get('return_on_equity'))} | ROA {_pct(km.get('return_on_assets'))}
+  Growth (YoY): Revenue {_pct(km.get('revenue_growth'))} | Earnings {_pct(km.get('earnings_growth'))}
+  Solvency    : Debt/Equity {_x(km.get('debt_to_equity'))} | Current Ratio {_x(km.get('current_ratio'))}
+  Per Share   : EPS {_dollar(km.get('earnings_per_share'))} | BV/Share {_dollar(km.get('book_value_per_share'))}
+  Price       : {_dollar(km.get('current_price'))}
+  Source      : financialdatasets.ai
+"""
+
+    # News
+    news_rows = []
+    news_parsed = []
+    for n in (news_data or [])[:10]:
+        title = n.get('title', '')
+        date  = (n.get('date') or '')[:10]
+        src   = n.get('source', '')
+        news_rows.append(f"  [{date}] {title} ({src})")
+        news_parsed.append({"title": title, "date": date, "source": src})
+
+    # Insider trades
+    insider_rows = []
+    for t in (insider_data or [])[:10]:
+        insider_rows.append(
+            f"  {(t.get('transaction_date') or '?')[:10]} | {t.get('insider_name','?')} ({t.get('title','?')})"
+            f" | {t.get('transaction_type','?')} {_B(t.get('value'))}"
+        )
+
+    filing_refs = _get_edgar_filing_refs(ticker)
+    has_data = bool(income_rows or mktcap)
+
+    return {
+        "income_table":   "\n".join(income_rows) or "  데이터 없음",
+        "cf_table":       "\n".join(cf_rows) or "  데이터 없음",
+        "bs_table":       "\n".join(bs_rows) or "  데이터 없음",
+        "key_metrics":    key_metrics_text,
+        "news":           "\n".join(news_rows) or "  뉴스 없음",
+        "insider_trades": "\n".join(insider_rows) or "  내부자 거래 없음",
+        "company_info":   "",
+        "filing_refs":    filing_refs,
+        "has_data":       has_data,
+        "_metrics":       km,
+        "_income":        income_rows,
+        "_cf":            cf_rows,
+        "_news_raw":      news_parsed,
+    }
+
+
+# ── yfinance US fetcher ───────────────────────────────────────────────────────
 
 def _fetch_us_yfinance(ticker: str) -> dict:
     """yfinance로 US 종목 재무 데이터 수집 (financialdatasets.ai 한도 초과 시 fallback)."""
@@ -461,189 +574,49 @@ def _fetch_us_yfinance(ticker: str) -> dict:
 
 # ── Main aggregator ───────────────────────────────────────────────────────────
 
+def _get_us_data_source(db) -> str:
+    """DB 설정에서 US 데이터 소스 조회. 기본값 yfinance."""
+    if not db:
+        return "yfinance"
+    try:
+        from models.db import Settings
+        row = db.query(Settings).filter(Settings.key == "us_data_source").first()
+        return row.value if row else "yfinance"
+    except Exception:
+        return "yfinance"
+
+
 def fetch_all(ticker: str, ticker_id: str | None = None, db=None, market: str = "US_Stock", company_name: str = "") -> dict:
     """
     종목의 전체 재무 데이터 수집.
     market="KR_Stock"이면 kr_financial_data.py로 dispatch.
+    US 주식은 설정에 따라 yfinance 또는 financialdatasets.ai 사용.
     db + ticker_id 제공 시 DB 캐시 우선 사용.
-    참고: virattt/ai-hedge-fund/src/tools/api.py
     """
     if market == "KR_Stock":
         from services.kr_financial_data import fetch_all_kr
         return fetch_all_kr(ticker, ticker_id=ticker_id, db=db, company_name=company_name)
 
+    source = _get_us_data_source(db)
+    logger.info("US data source for %s: %s", ticker, source)
+
+    if source == "financialdatasets" and db and ticker_id:
+        result = _fetch_us_financialdatasets(ticker, ticker_id, db)
+        if result.get("has_data"):
+            return result
+        logger.warning("financialdatasets failed for %s, falling back to yfinance", ticker)
+
+    # yfinance path (default or fallback)
     if db and ticker_id:
-        income_stmts   = _fetch_cached(db, ticker_id, ticker, "income",         _api_income)
-        balance_sheets = _fetch_cached(db, ticker_id, ticker, "balance",        _api_balance)
-        cash_flows     = _fetch_cached(db, ticker_id, ticker, "cashflow",       _api_cashflow)
-        metrics_list   = _fetch_cached(db, ticker_id, ticker, "metrics",        _api_metrics)
-        news           = _fetch_cached(db, ticker_id, ticker, "news",           _api_news)
-        insider_trades = _fetch_cached(db, ticker_id, ticker, "insider_trades", _api_insider_trades)
-        facts          = _fetch_cached(db, ticker_id, ticker, "facts",          _api_facts)
-    else:
-        income_stmts   = _api_income(ticker)
-        balance_sheets = _api_balance(ticker)
-        cash_flows     = _api_cashflow(ticker)
-        metrics_list   = _api_metrics(ticker)
-        news           = _api_news(ticker)
-        insider_trades = _api_insider_trades(ticker)
-        facts          = _api_facts(ticker)
+        cached = _cache_get(db, ticker_id, "yfinance_data")
+        if cached is not None:
+            logger.debug("yfinance_data cache hit: %s", ticker)
+            return cached
 
-    # 402 감지: income 또는 metrics가 quota exceeded면 yfinance로 전환
-    if income_stmts is _QUOTA_EXCEEDED or metrics_list is _QUOTA_EXCEEDED:
-        logger.info("financialdatasets quota exceeded, switching to yfinance for %s", ticker)
-        result = _fetch_us_yfinance(ticker)
-        if db and ticker_id and result.get("has_data"):
-            _cache_set(db, ticker_id, "metrics", [result.get("_metrics", {})])
-            if result.get("_news_raw"):
-                _cache_set(db, ticker_id, "news", result["_news_raw"])
-        return result
+    time.sleep(1)
+    result = _fetch_us_yfinance(ticker)
 
-    # metrics: API는 list, facts: API는 dict — 캐시 저장 시 맞춰야 함
-    if isinstance(metrics_list, list):
-        metrics = metrics_list[0] if metrics_list else {}
-    else:
-        metrics = {}
-    if not isinstance(facts, dict):
-        facts = {}
-    # 나머지 필드도 sentinel 정리
-    if income_stmts   is _QUOTA_EXCEEDED: income_stmts   = []
-    if balance_sheets is _QUOTA_EXCEEDED: balance_sheets = []
-    if cash_flows     is _QUOTA_EXCEEDED: cash_flows     = []
-    if news           is _QUOTA_EXCEEDED: news           = []
-    if insider_trades is _QUOTA_EXCEEDED: insider_trades = []
+    if db and ticker_id and result.get("has_data"):
+        _cache_set(db, ticker_id, "yfinance_data", result)
 
-    # ── Income Table ──────────────────────────────────────────────────────────
-    income_rows = []
-    for i, stmt in enumerate(income_stmts):
-        period = (stmt.get("report_period") or "")[:4]
-        prev = income_stmts[i + 1] if i + 1 < len(income_stmts) else None
-        income_rows.append(
-            f"  {period} | Revenue {_B(stmt.get('revenue'))} ({_yoy(stmt.get('revenue'), prev.get('revenue') if prev else None)})"
-            f" | Gross {_B(stmt.get('gross_profit'))} ({_pct(stmt.get('gross_profit')/stmt.get('revenue') if stmt.get('revenue') else None)} margin)"
-            f" | OpInc {_B(stmt.get('operating_income'))}"
-            f" | NetInc {_B(stmt.get('net_income'))}"
-            f" | EPS ${stmt.get('earnings_per_share_diluted') or 'N/A'}"
-            f" | R&D {_B(stmt.get('research_and_development'))}"
-        )
-
-    # ── Cash Flow Table ───────────────────────────────────────────────────────
-    cf_rows = []
-    for idx, stmt in enumerate(cash_flows):
-        period = (stmt.get("report_period") or "")[:4]
-        ocf = stmt.get("net_cash_flow_from_operations")
-        capex = stmt.get("capital_expenditure")
-        fcf = stmt.get("free_cash_flow")
-        if fcf is None and ocf is not None and capex is not None:
-            fcf = ocf - abs(capex)
-        buybacks = stmt.get("issuance_or_purchase_of_equity_shares")
-        divs = stmt.get("dividends_and_other_cash_distributions")
-        rev = income_stmts[idx].get("revenue") if idx < len(income_stmts) else None
-        cf_rows.append(
-            f"  {period} | OCF {_B(ocf)}"
-            f" | Capex {_B(abs(capex) if capex else None)}"
-            f" | FCF {_B(fcf)} ({_pct(fcf/rev if fcf and rev else None)} of rev)"
-            f" | Buybacks {_B(abs(buybacks) if buybacks and buybacks < 0 else None)}"
-            f" | Dividends {_B(abs(divs) if divs and divs < 0 else None)}"
-        )
-
-    # ── Balance Sheet Table ───────────────────────────────────────────────────
-    bs_rows = []
-    for idx, stmt in enumerate(balance_sheets):
-        period = (stmt.get("report_period") or "")[:4]
-        total_debt = stmt.get("total_debt")
-        cash_eq = stmt.get("cash_and_equivalents")
-        ebitda_approx = None
-        matching_inc = next(
-            (s for s in income_stmts if (s.get("report_period") or "")[:4] == period), None
-        )
-        if matching_inc:
-            op_inc = matching_inc.get("operating_income")
-            da = next(
-                (c.get("depreciation_and_amortization") for c in cash_flows if (c.get("report_period") or "")[:4] == period),
-                None,
-            )
-            if op_inc and da:
-                ebitda_approx = op_inc + da
-        net_debt = (total_debt or 0) - (cash_eq or 0)
-        bs_rows.append(
-            f"  {period} | Assets {_B(stmt.get('total_assets'))}"
-            f" | Cash {_B(cash_eq)}"
-            f" | TotalDebt {_B(total_debt)}"
-            f" | Equity {_B(stmt.get('shareholders_equity'))}"
-            f" | Net Debt {_B(net_debt)}"
-            f" | NetDebt/EBITDA {_x(net_debt / ebitda_approx if total_debt and ebitda_approx else None)}"
-        )
-
-    # ── Key Metrics (TTM) ─────────────────────────────────────────────────────
-    km = metrics
-    key_metrics_text = f"""
-  Valuation   : Market Cap {_B(km.get('market_cap'))} | EV {_B(km.get('enterprise_value'))}
-                P/E {_x(km.get('price_to_earnings_ratio'))} | P/B {_x(km.get('price_to_book_ratio'))}
-                P/S {_x(km.get('price_to_sales_ratio'))} | EV/EBITDA {_x(km.get('enterprise_value_to_ebitda_ratio'))}
-                FCF Yield {_pct(km.get('free_cash_flow_yield'))} | PEG {_x(km.get('peg_ratio'))}
-  Profitability: Gross {_pct(km.get('gross_margin'))} | Operating {_pct(km.get('operating_margin'))} | Net {_pct(km.get('net_margin'))}
-  Returns     : ROE {_pct(km.get('return_on_equity'))} | ROA {_pct(km.get('return_on_assets'))} | ROIC {_pct(km.get('return_on_invested_capital'))}
-  Growth (YoY): Revenue {_pct(km.get('revenue_growth'))} | Earnings {_pct(km.get('earnings_growth'))} | FCF {_pct(km.get('free_cash_flow_growth'))}
-  Solvency    : Debt/Equity {_x(km.get('debt_to_equity'))} | Current Ratio {_x(km.get('current_ratio'))} | Interest Coverage {_x(km.get('interest_coverage'))}
-  Per Share   : EPS {_dollar(km.get('earnings_per_share'))} | FCF/Share {_dollar(km.get('free_cash_flow_per_share'))} | BV/Share {_dollar(km.get('book_value_per_share'))}
-"""
-
-    # ── News ──────────────────────────────────────────────────────────────────
-    news_list = news if isinstance(news, list) else []
-    news_text = "\n".join(
-        f"  [{n.get('date', '')[:10]}] {n.get('title', '')} ({n.get('source', '')})"
-        for n in news_list[:10]
-    ) or "  최근 뉴스 없음 (US 종목이 아니거나 데이터 미확인)"
-
-    # ── Insider Trades ────────────────────────────────────────────────────────
-    trades_list = insider_trades if isinstance(insider_trades, list) else []
-    insider_rows = []
-    buy_count = sell_count = 0
-    for t in trades_list[:20]:
-        tx_type = t.get("transaction_type", "")
-        shares = t.get("transaction_shares")
-        value = t.get("transaction_value")
-        name = t.get("name", "Unknown")
-        title = t.get("title", "")
-        date = (t.get("transaction_date") or t.get("filing_date") or "")[:10]
-        is_buy  = "purchase" in tx_type.lower() or tx_type.lower() == "buy"
-        is_sell = "sale" in tx_type.lower() or tx_type.lower() == "sell"
-        if is_buy:
-            buy_count += 1
-        elif is_sell:
-            sell_count += 1
-        shares_fmt = f"{int(shares):,}" if shares else "N/A"
-        value_fmt = _B(value) if value else "N/A"
-        insider_rows.append(
-            f"  {date} | {tx_type[:30]:<30} | {name} ({title[:30]}) | Shares: {shares_fmt} | Value: {value_fmt}"
-        )
-    insider_summary = f"  순매수 {buy_count}건 / 순매도 {sell_count}건 / 총 {len(trades_list)}건 (최근)"
-    insider_text = insider_summary + "\n" + ("\n".join(insider_rows) or "  데이터 없음")
-
-    # ── Company Facts ─────────────────────────────────────────────────────────
-    company_text = (
-        f"  Sector: {facts.get('sector', 'N/A')} | Industry: {facts.get('industry', 'N/A')}"
-        f" | Exchange: {facts.get('exchange', 'N/A')} | Location: {facts.get('location', 'N/A')}"
-    )
-
-    # filing URLs for SEC pipeline — annual이므로 period는 4자리 연도 (10-K 판별 기준)
-    filing_refs = [
-        {"period": (s.get("report_period") or "")[:4], "url": s.get("filing_url"), "accession": s.get("accession_number")}
-        for s in income_stmts if s.get("filing_url")
-    ]
-
-    return {
-        "income_table":   "\n".join(income_rows) or "  데이터 없음",
-        "cf_table":       "\n".join(cf_rows) or "  데이터 없음",
-        "bs_table":       "\n".join(bs_rows) or "  데이터 없음",
-        "key_metrics":    key_metrics_text,
-        "news":           news_text,
-        "insider_trades": insider_text,
-        "company_info":   company_text,
-        "filing_refs":    filing_refs,
-        "has_data":       bool(income_stmts or metrics_list),
-        "_metrics":       km,
-        "_income":        income_stmts,
-        "_cf":            cash_flows,
-    }
+    return result

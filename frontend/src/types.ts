@@ -55,6 +55,13 @@ export interface FinancialData {
   sec_summaries: SecSummary[]
 }
 
+export interface ReportComment {
+  id: string
+  report_id: string
+  content: string
+  created_at: string
+}
+
 export type SseEvent =
   | { type: 'start'; symbol: string }
   | { type: 'chunk'; text: string }

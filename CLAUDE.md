@@ -33,15 +33,17 @@ value-copilot/
 │   ├── models/
 │   │   └── db.py                   # ORM 모델 + UniqueConstraint
 │   ├── routes/
-│   │   ├── tickers.py              # 종목 CRUD + analyze/refine/refresh-data/report/financial-data
+│   │   ├── tickers.py              # 종목 CRUD + analyze/refine/refresh-data/report/bulk-refresh
 │   │   ├── thesis.py               # Thesis CRUD + confirm
 │   │   ├── reports.py              # 보고서 목록 + 트리거 + discovery + portfolio-review
-│   │   └── market.py               # 시장 지표 API
+│   │   ├── market.py               # 시장 지표 API
+│   │   └── settings.py             # GET /api/settings + PUT /api/settings/{key} + GET /api/settings/system-info
 │   ├── services/
 │   │   ├── agent.py                # Agent Core — 모든 Claude 호출
-│   │   ├── financial_data.py       # financialdatasets.ai API + DB 캐시 (US 종목)
+│   │   ├── financial_data.py       # US 종목 재무 데이터 (yfinance 기본 / financialdatasets 선택) + DB 캐시
 │   │   ├── kr_financial_data.py    # OpenDART + yfinance (KR 종목)
 │   │   ├── sec_pipeline.py         # EDGAR 공시 → Claude Haiku 요약 → DB
+│   │   ├── dart_pipeline.py        # DART 정기공시 TOC → viewer.do → Claude Haiku 요약 → DB
 │   │   ├── scheduler.py            # 06:00 light_refresh / 07:00 briefing / 08:00 break_monitor
 │   │   ├── market_data.py          # VIX / S&P500 / KOSPI / Fear&Greed
 │   │   ├── portfolio_sync.py       # KIS API 동기화
@@ -70,8 +72,10 @@ value-copilot/
     ├── Dockerfile.prod             # 프로덕션 빌드 (node → nginx 멀티스테이지)
     ├── nginx.conf                  # SPA 라우팅 + /api/ 프록시 + SSE 지원
     └── src/
+        ├── components/
+        │   └── Markdown.tsx        # 외부 라이브러리 없는 커스텀 마크다운 렌더러 (헤더/bold/리스트/테이블)
         ├── pages/
-        │   ├── Dashboard.tsx       # 포트폴리오/관심 섹션 분리 + 현재가/등락/수익률 표시
+        │   ├── Dashboard.tsx       # 포트폴리오/관심 섹션 + 멀티셀렉트 bulk 작업 + 설정 모달
         │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 (재무제표/지표/공시 요약)
         │   └── Reports.tsx         # 보고서 히스토리 + Discovery + Portfolio Review
         ├── api.ts                  # fetch 래퍼 + SSE 스트림 헬퍼
@@ -123,27 +127,34 @@ Portfolio:
   daily_pct: float
   updated_at: datetime
 
-# FinancialCache — financialdatasets.ai API 응답 캐시
+# FinancialCache — API 응답 캐시 (TTL 기반)
 FinancialCache:
   id: uuid
   ticker_id: uuid (FK, CASCADE)
-  data_type: str       # income|balance|cashflow|metrics|news|insider_trades|facts
+  data_type: str       # US: yfinance_data | income|balance|cashflow|metrics|news|insider_trades|facts
+                       # KR: income|metrics|news|naver_news|insider_trades|facts
   data: JSON
   fetched_at: datetime
   expires_at: datetime
   UNIQUE(ticker_id, data_type)   # 종목+타입 조합은 항상 1행
 
-# SecFilingSummary — SEC 10-K/10-Q Claude 요약 (누적)
+# SecFilingSummary — SEC/DART 공시 Claude 요약 (누적)
 SecFilingSummary:
   id: uuid
   ticker_id: uuid (FK, CASCADE)
-  filing_type: str     # 10-K | 10-Q
-  report_period: str   # 2024 | 2024-Q3
+  filing_type: str     # 10-K | 10-Q | 사업보고서 | 반기보고서
+  report_period: str   # 2024 | 2024-Q3 | 2025-04
   filing_url: text
-  business_summary: text   # Item 1 요약
-  risk_summary: text       # Item 1A 요약
-  mda_summary: text        # Item 7 요약
+  business_summary: text   # Item 1 / 사업의 내용 요약
+  risk_summary: text       # Item 1A / 위험요소 요약
+  mda_summary: text        # Item 7 / 경영진단 요약
   summarized_at: datetime
+
+# Settings — 사용자 설정 key-value 스토어
+Settings:
+  key: str (PK)        # us_data_source
+  value: str           # yfinance | financialdatasets
+  updated_at: datetime
 ```
 
 ---
@@ -152,14 +163,21 @@ SecFilingSummary:
 
 ```
 FinancialCache TTL:
+  yfinance_data               : 24시간 (US 종목 yfinance 통합 캐시 — 재무제표+지표+뉴스 일체)
   income / balance / cashflow : 90일  (분기 공시 — 수동 갱신)
-  metrics / news              : 24시간 (매일 06:00 자동 갱신)
+  metrics / news / naver_news : 24시간 (매일 06:00 자동 갱신)
   insider_trades              : 3일   (매일 06:00 자동 갱신)
   facts                       : 30일  (수동 갱신)
 
 갱신 방식:
-  수동 "데이터 갱신" 버튼 → 해당 종목 전체 캐시 삭제 + 재수집 + SEC 파이프라인
-  06:00 light_refresh      → news / metrics / insider_trades만 overwrite (재무제표 건드리지 않음)
+  수동 "데이터 갱신" 버튼 (단일 종목)   → 해당 종목 전체 캐시 삭제 + 재수집 + SEC/DART 파이프라인
+  bulk-refresh (복수 종목 선택)          → BackgroundTask로 순차 처리(종목 간 2초 sleep), 프론트 15초 polling
+  06:00 light_refresh                    → news / metrics / insider_trades만 overwrite (재무제표 건드리지 않음)
+
+Rate limit 보호:
+  yfinance      : 수집 전 1초 sleep, bulk 시 종목 간 2초 sleep
+  DART viewer   : 섹션 fetch 간 1초 sleep
+  Anthropic API : Haiku 호출 간 1.5초 sleep, 공시 건당 1.5초 cooldown
 ```
 
 ---
@@ -169,11 +187,15 @@ FinancialCache TTL:
 ```
 [종목 추가]
     ↓
-[데이터 수집] (수동, "데이터 갱신" 버튼)
-  US: financialdatasets.ai → FinancialCache (7종 데이터)
-      EDGAR HTML → Claude Haiku 요약 → SecFilingSummary
+[데이터 수집] (수동 단일 / Dashboard 멀티셀렉트 bulk)
+  US: yfinance → FinancialCache(yfinance_data, 24h)  ← 기본
+      financialdatasets.ai → FinancialCache(income/balance/cashflow/metrics/news/insider_trades)
+        ↑ Settings(us_data_source=financialdatasets) 시 사용, 한도 초과 시 yfinance로 자동 전환
+      EDGAR submissions API → primary HTML → Claude Haiku 요약 → SecFilingSummary
   KR: OpenDART → FinancialCache (income/news/insider_trades/facts)
       yfinance (.KS/.KQ 자동 판별) → FinancialCache (metrics)
+      네이버 뉴스 API → FinancialCache (naver_news)
+      DART 정기공시 TOC → viewer.do → Claude Haiku 요약 → SecFilingSummary
     ↓
 [AI 분석] ("AI 분석" 버튼)
   FinancialCache 조회 → financial_context 구성
@@ -244,14 +266,17 @@ Agent      Anthropic API
 
 DB         PostgreSQL 15 (프로덕션: EC2 3.26.145.173, 로컬 sync 없음)
            - FinancialCache: TTL 기반 API 캐시 (종목별 overwrite)
-           - SecFilingSummary: 공시 요약 누적 (period별 고유)
+           - SecFilingSummary: US SEC + KR DART 공시 요약 누적 (period별 고유)
            - Report: 보고서 누적 (삭제 없음, 최신 배지 UI)
+           - Settings: 사용자 설정 key-value (us_data_source 등)
            ref: ginlix-ai/LangAlpha
 
-External   financialdatasets.ai: US 종목 재무 데이터 (free tier: 연간 3년, limit=10)
-           SEC EDGAR: 10-K/10-Q HTML 공시 원문
-           OpenDART: KR 종목 재무제표 / 공시 / 임원 주식 변동
-           yfinance: KR 종목 시장 지표 (KOSPI=.KS / KOSDAQ=.KQ 자동 판별)
+External   yfinance: US 종목 재무 데이터 기본 소스 (재무제표+지표+뉴스 통합)
+                    KR 종목 시장 지표 (KOSPI=.KS / KOSDAQ=.KQ 자동 판별)
+           financialdatasets.ai: US 종목 선택적 소스 (Settings에서 전환, free tier: 연간 3년)
+           SEC EDGAR: 10-K/10-Q HTML 공시 원문 (submissions API → primary doc)
+           OpenDART: KR 종목 재무제표 / 공시 / 임원 주식 변동 / 정기공시 TOC
+           네이버 뉴스 API: KR 종목 뉴스 (NAVER_CLIENT_ID 필요, 없으면 skip)
            KIS API: 포트폴리오 동기화 (5개 계좌)
 
 Messaging  python-telegram-bot
@@ -319,7 +344,7 @@ agi-now/buffett-skills
   → thesis-generator/refs/ value-investing.md
 
 virattt/ai-hedge-fund
-  → financialdatasets.ai API 래퍼 패턴 (financial_data.py)
+  → financial_data.py 구조 참고 (현재는 yfinance 기본 + financialdatasets 선택)
   → React + SSE 스트리밍 UI 패턴
 
 ginlix-ai/LangAlpha
@@ -344,8 +369,10 @@ KIS_APP_KEY=
 KIS_APP_SECRET=
 KIS_ACCOUNT_NO=
 
-FINANCIAL_DATASETS_API_KEY=   # US 종목 재무 데이터
+FINANCIAL_DATASETS_API_KEY=   # US 종목 선택적 데이터 소스 (Settings에서 전환 시 필요)
 OPENDART_API_KEY=             # KR 종목 재무제표 / 공시 (OpenDART)
+NAVER_CLIENT_ID=              # KR 종목 뉴스 (네이버 뉴스 검색 API, 없으면 뉴스 skip)
+NAVER_CLIENT_SECRET=
 ```
 
 ---
@@ -375,9 +402,13 @@ docker compose up -d --build  # 의존성 변경 후
 - **데이터 수집 선행 필수**: AI 분석 / 보고서 생성 전 반드시 "데이터 갱신" 버튼 클릭
 - **보고서 생성 조건**: FinancialCache에 데이터 있어야만 활성화 (백엔드 400 반환)
 - **보고서는 누적 보존**: 삭제 없음. 실적 전후 비교가 가치투자 검증의 핵심
-- **KR 종목 데이터**: OpenDART(재무제표/공시) + yfinance(시장지표). KOSPI=`.KS`, KOSDAQ=`.KQ` 자동 판별
+- **US 종목 데이터**: yfinance 기본. `yfinance_data` 단일 캐시 키에 재무제표+지표+뉴스 통합 저장
+- **US 데이터 소스 전환**: Settings(us_data_source) DB 값으로 제어. financialdatasets 선택 시 한도 초과 → yfinance 자동 전환
+- **KR 종목 데이터**: OpenDART(재무제표/공시) + yfinance(시장지표) + 네이버뉴스(선택). KOSPI=`.KS`, KOSDAQ=`.KQ` 자동 판별
 - **KR balance/cashflow**: DART `fnlttSinglAcntAll` 단일 호출로 IS/BS/CF 모두 추출 (중복 API 호출 없음)
-- **SEC 파이프라인**: 보고서 생성 전 자동 실행. EDGAR 응답 없으면 non-fatal skip
-- **free tier 제한**: financialdatasets.ai news limit=10 / 연간 데이터 3년
+- **SEC 파이프라인**: 데이터 수집 시 자동 실행. EDGAR 응답 없으면 non-fatal skip
+- **DART 파이프라인**: KR 종목 데이터 수집 시 자동 실행. dart_pipeline.py가 main.do TOC → viewer.do 방식으로 공시 요약
+- **Bulk 작업**: `POST /api/tickers/bulk-refresh` → BackgroundTask 단일 태스크로 순차 처리. 프론트는 15초 polling으로 완료 감지
+- **마크다운 렌더링**: 모든 LLM 생성 텍스트(thesis/보고서/공시 요약)는 `Markdown.tsx`로 렌더링. 스트리밍 중 및 재무 테이블은 `pre` 유지
 - **자동매매 코드 작성 금지**
 - **Thesis confirmed 변경은 반드시 사람의 명시적 액션으로만**

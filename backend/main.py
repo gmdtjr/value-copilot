@@ -8,6 +8,7 @@ from routes.thesis import router as thesis_router
 from routes.reports import router as reports_router
 from routes.portfolio import router as portfolio_router
 from routes.market import router as market_router
+from routes.settings import router as settings_router
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ app.include_router(thesis_router, prefix="/api/thesis", tags=["thesis"])
 app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["portfolio"])
 app.include_router(market_router, prefix="/api/market", tags=["market"])
+app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 
 
 @app.on_event("startup")
@@ -55,6 +57,19 @@ async def startup():
                 f"AND enumtypid=(SELECT oid FROM pg_type WHERE typname='reporttypeenum')) "
                 f"THEN ALTER TYPE reporttypeenum ADD VALUE '{_val}'; END IF; END $$;"
             ))
+        # is_read 컬럼 (Report 테이블)
+        conn.execute(_text(
+            "ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;"
+        ))
+        # report_comments 테이블 (create_all로 생성되지만 기존 DB에도 안전)
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS report_comments (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                report_id UUID NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT now()
+            );
+        """))
         conn.commit()
     logger.info("DB tables ready")
     from services.telegram_bot import start_bot
