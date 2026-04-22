@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Sparkles, Settings } from 'lucide-react'
+import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Sparkles, Settings, BookOpen } from 'lucide-react'
 import { api } from '../api'
 import type { Ticker, Market } from '../types'
 
@@ -345,6 +345,13 @@ export default function Dashboard() {
           >
             <FileText size={15} />
             보고서
+          </button>
+          <button
+            onClick={() => navigate('/journal')}
+            className="flex items-center gap-1.5 text-gray-400 hover:text-white text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+          >
+            <BookOpen size={15} />
+            일지
           </button>
           <button
             onClick={() => {

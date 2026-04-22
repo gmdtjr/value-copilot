@@ -6,7 +6,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from models.db import SessionLocal, Ticker, Report, FinancialCache, TickerStatusEnum, ThesisStatusEnum, ReportTypeEnum
 from services.agent import generate_daily_briefing, run_break_monitor
-from services.telegram import send_message, notify_break_monitor
+from services.telegram import notify_break_monitor, notify_daily_briefing
 
 logger = logging.getLogger(__name__)
 
@@ -136,12 +136,7 @@ def run_daily_briefing():
         db.commit()
         logger.info("Daily briefing saved (report_id=%s)", report.id)
 
-        now_kst = datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
-        send_message(
-            f"☀️ <b>데일리 브리핑</b> — {now_kst}\n\n"
-            f"{sections.get('macro', '')}\n\n"
-            f"웹앱에서 전체 내용을 확인하세요."
-        )
+        notify_daily_briefing(str(report.id), sections.get("macro", ""))
     except Exception:
         logger.exception("Daily briefing job failed")
     finally:
@@ -184,6 +179,7 @@ def run_break_monitor_job():
                 notify_break_monitor(
                     ticker.symbol, ticker.name,
                     result["signal"], result.get("assessment", ""),
+                    ticker_id=str(ticker.id),
                 )
                 logger.info("Break Monitor %s → %s", ticker.symbol, result["signal"])
             except Exception:

@@ -13,7 +13,7 @@ from models.db import (
     get_db, Ticker, Thesis, Report, MarketEnum, TickerStatusEnum, ThesisStatusEnum, ReportTypeEnum,
 )
 from services.agent import generate_thesis_stream, refine_thesis_stream, generate_ticker_report, run_break_monitor
-from services.telegram import notify_report_generated, notify_break_monitor
+from services.telegram import notify_report_generated, notify_break_monitor, notify_thesis_needs_review
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -185,7 +185,7 @@ def _run_break_monitor_task(ticker_id: str, symbol: str, name: str, thesis: str,
             news_context=_fmt_news_full(news_data, limit=7),
             metrics_context=_fmt_metrics(metrics_data),
         )
-        notify_break_monitor(symbol, name, result["signal"], result.get("assessment", ""))
+        notify_break_monitor(symbol, name, result["signal"], result.get("assessment", ""), ticker_id=ticker_id)
         logger.info("Break Monitor %s → %s", symbol, result["signal"])
     except Exception:
         logger.exception("Break Monitor 실패: %s", symbol)
@@ -253,14 +253,15 @@ def analyze_ticker(ticker_id: str, db: Session = Depends(get_db)):
                 thesis.risk = sections.get("risk")
                 thesis.key_assumptions = sections.get("key_assumptions")
                 thesis.valuation = sections.get("valuation")
+                was_confirmed = thesis.confirmed == ThesisStatusEnum.CONFIRMED
                 thesis.confirmed = (
-                    ThesisStatusEnum.NEEDS_REVIEW
-                    if thesis.confirmed == ThesisStatusEnum.CONFIRMED
-                    else ThesisStatusEnum.DRAFT
+                    ThesisStatusEnum.NEEDS_REVIEW if was_confirmed else ThesisStatusEnum.DRAFT
                 )
                 thesis.last_analyzed_at = datetime.utcnow()
                 fresh_db.commit()
                 logger.info("Thesis saved for %s", ticker.symbol)
+                if was_confirmed:
+                    notify_thesis_needs_review(ticker.symbol, ticker.name, ticker.market.value, ticker_id=str(ticker.id))
 
     return StreamingResponse(
         event_stream(),
@@ -322,14 +323,15 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
                 t.risk = sections.get("risk")
                 t.key_assumptions = sections.get("key_assumptions")
                 t.valuation = sections.get("valuation")
+                was_confirmed = t.confirmed == ThesisStatusEnum.CONFIRMED
                 t.confirmed = (
-                    ThesisStatusEnum.NEEDS_REVIEW
-                    if t.confirmed == ThesisStatusEnum.CONFIRMED
-                    else ThesisStatusEnum.DRAFT
+                    ThesisStatusEnum.NEEDS_REVIEW if was_confirmed else ThesisStatusEnum.DRAFT
                 )
                 t.last_analyzed_at = datetime.utcnow()
                 db.commit()
                 logger.info("Thesis refined for %s", ticker.symbol)
+                if was_confirmed:
+                    notify_thesis_needs_review(ticker.symbol, ticker.name, ticker.market.value, ticker_id=str(ticker.id))
 
     return StreamingResponse(
         event_stream(),
@@ -595,7 +597,7 @@ def _run_report(
         db.commit()
         logger.info("Deep report saved for %s", symbol)
         summary = sections.get("investment_conclusion", sections.get("business_overview", ""))[:300]
-        notify_report_generated(symbol, name, summary)
+        notify_report_generated(symbol, name, summary, report_id=str(report.id))
     except Exception:
         logger.exception("Report generation failed for %s", symbol)
     finally:

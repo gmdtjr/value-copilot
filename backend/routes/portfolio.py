@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from models.db import get_db, Portfolio, Ticker
 from services.portfolio_sync import sync_portfolio
+from services.telegram import notify_trades_detected
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -61,5 +62,11 @@ def _run_sync():
     try:
         result = sync_portfolio()
         logger.info("포트폴리오 동기화: %s", result)
+        trades = result.get("trades", [])
+        if trades:
+            try:
+                notify_trades_detected(trades)
+            except Exception:
+                logger.exception("거래 감지 알림 실패")
     except Exception:
         logger.exception("포트폴리오 동기화 실패")

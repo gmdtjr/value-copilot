@@ -11,6 +11,7 @@ from models.db import get_db, Report, ReportComment, Ticker, Portfolio, Thesis, 
 from services.scheduler import run_daily_briefing
 from services.agent import generate_macro_report, generate_discovery_stream, generate_portfolio_review_stream
 from services.market_data import get_market_indicators
+from services.telegram import notify_discovery_saved, notify_portfolio_review_saved, notify_macro_saved
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -166,7 +167,6 @@ def run_discovery(body: DiscoveryRequest):
     """투자 아이디어 → 유망 종목 탐색 보고서 (SSE 스트리밍)."""
     idea = body.idea.strip()
     if not idea:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="idea는 필수입니다")
 
     def event_stream():
@@ -191,6 +191,10 @@ def run_discovery(body: DiscoveryRequest):
                 report_id = str(report.id)
                 db.close()
                 yield f"data: {_json.dumps({'type': 'saved', 'report_id': report_id})}\n\n"
+                try:
+                    notify_discovery_saved(report_id, idea[:80])
+                except Exception:
+                    pass
             except Exception:
                 logger.exception("Discovery report DB 저장 실패")
 
@@ -207,7 +211,6 @@ def run_portfolio_review():
         db.close()
 
     if not portfolio_context:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="포트폴리오 종목이 없습니다. KIS 동기화를 먼저 실행하세요.")
 
     def event_stream():
@@ -232,6 +235,10 @@ def run_portfolio_review():
                 report_id = str(report.id)
                 _db.close()
                 yield f"data: {_json.dumps({'type': 'saved', 'report_id': report_id})}\n\n"
+                try:
+                    notify_portfolio_review_saved(report_id)
+                except Exception:
+                    pass
             except Exception:
                 logger.exception("Portfolio review DB 저장 실패")
 
@@ -348,6 +355,7 @@ def _run_macro_report():
         db.add(report)
         db.commit()
         logger.info("Macro report saved")
+        notify_macro_saved(str(report.id))
     except Exception:
         logger.exception("Macro report 생성 실패")
     finally:

@@ -9,6 +9,7 @@ from routes.reports import router as reports_router
 from routes.portfolio import router as portfolio_router
 from routes.market import router as market_router
 from routes.settings import router as settings_router
+from routes.tradelog import router as tradelog_router
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["portfolio"])
 app.include_router(market_router, prefix="/api/market", tags=["market"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
+app.include_router(tradelog_router, prefix="/api/tradelog", tags=["tradelog"])
 
 
 @app.on_event("startup")
@@ -68,6 +70,30 @@ async def startup():
                 report_id UUID NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
                 content TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT now()
+            );
+        """))
+        # trade_logs 테이블
+        conn.execute(_text("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='tradeactionenum') THEN
+                    CREATE TYPE tradeactionenum AS ENUM ('buy', 'sell', 'add', 'reduce');
+                END IF;
+            END $$;
+        """))
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS trade_logs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                ticker_id UUID REFERENCES tickers(id) ON DELETE SET NULL,
+                symbol VARCHAR(20) NOT NULL,
+                name VARCHAR(200) NOT NULL,
+                action tradeactionenum NOT NULL,
+                quantity_before FLOAT NOT NULL DEFAULT 0,
+                quantity_after FLOAT NOT NULL DEFAULT 0,
+                avg_price_before FLOAT NOT NULL DEFAULT 0,
+                avg_price_after FLOAT NOT NULL DEFAULT 0,
+                note TEXT,
+                detected_at TIMESTAMP DEFAULT now(),
+                noted_at TIMESTAMP
             );
         """))
         conn.commit()

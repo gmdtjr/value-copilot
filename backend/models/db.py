@@ -50,6 +50,12 @@ class ReportTypeEnum(str, enum.Enum):
     DISCOVERY = "discovery"
     PORTFOLIO_REVIEW = "portfolio_review"
 
+class TradeActionEnum(str, enum.Enum):
+    BUY = "buy"        # 신규 매수
+    SELL = "sell"      # 전량 매도
+    ADD = "add"        # 추가 매수
+    REDUCE = "reduce"  # 일부 매도
+
 
 # ── ORM Models ────────────────────────────────────────────────────────────────
 
@@ -162,3 +168,21 @@ class Settings(Base):
     key = Column(String(100), primary_key=True)
     value = Column(String(500), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TradeLog(Base):
+    """KIS 동기화 전/후 거래 감지 기록. 사용자가 거래 이유(note)를 작성."""
+    __tablename__ = "trade_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id", ondelete="SET NULL"), nullable=True)
+    symbol = Column(String(20), nullable=False)
+    name = Column(String(200), nullable=False)
+    action = Column(SAEnum(TradeActionEnum), nullable=False)
+    quantity_before = Column(Float, nullable=False, default=0)
+    quantity_after = Column(Float, nullable=False, default=0)
+    avg_price_before = Column(Float, nullable=False, default=0)
+    avg_price_after = Column(Float, nullable=False, default=0)
+    note = Column(Text, nullable=True)
+    detected_at = Column(DateTime, default=datetime.utcnow)
+    noted_at = Column(DateTime, nullable=True)

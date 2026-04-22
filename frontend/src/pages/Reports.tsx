@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff } from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
@@ -328,6 +328,7 @@ function MacroReportView({ report }: { report: Report }) {
 
 export default function ReportsPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [reports, setReports] = useState<Report[]>([])
   const [loading, setLoading] = useState(true)
   const [triggering, setTriggering] = useState(false)
@@ -362,7 +363,16 @@ export default function ReportsPage() {
     setLoading(true)
     try {
       const res = await fetch('/api/reports')
-      if (res.ok) setReports(await res.json())
+      if (res.ok) {
+        const data: Report[] = await res.json()
+        setReports(data)
+        // ?id= 쿼리 파라미터로 특정 보고서 바로 열기
+        const targetId = searchParams.get('id')
+        if (targetId) {
+          const found = data.find(r => r.id === targetId)
+          if (found) selectReport(found)
+        }
+      }
     } finally {
       setLoading(false)
     }
