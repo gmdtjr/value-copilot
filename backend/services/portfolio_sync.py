@@ -21,13 +21,11 @@ def sync_portfolio() -> dict:
     exchange_rate = get_exchange_rate()
     logger.info("환율: %.2f원/USD", exchange_rate)
 
-    # 전 계좌 holdings 수집
+    # 전 계좌 holdings 수집 — 모든 계좌에서 국내/해외 모두 조회
     raw: list[dict] = []
     for account in accounts:
-        if account.account_type == "domestic":
-            raw.extend(_kis.get_domestic_portfolio(account))
-        else:
-            raw.extend(_kis.get_overseas_portfolio(account, exchange_rate))
+        raw.extend(_kis.get_domestic_portfolio(account))
+        raw.extend(_kis.get_overseas_portfolio(account, exchange_rate))
 
     # 심볼별 집계 (여러 계좌에 같은 종목 있을 수 있음)
     aggregated: dict[str, dict] = {}

@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from models.db import SessionLocal, Ticker, Report, FinancialCache, TickerStatusEnum, ThesisStatusEnum, ReportTypeEnum
+from models.db import SessionLocal, Ticker, Report, FinancialCache, Portfolio, TickerStatusEnum, ThesisStatusEnum, ReportTypeEnum
 from services.agent import generate_daily_briefing, run_break_monitor
 from services.telegram import notify_break_monitor, notify_daily_briefing
 
@@ -202,11 +202,49 @@ def run_light_refresh():
         for ticker in tickers:
             try:
                 _refresh_light_cache(db, ticker.symbol, str(ticker.id), ticker.market.value, ticker.name)
+                if ticker.portfolio:
+                    _refresh_portfolio_quote(db, ticker)
             except Exception:
                 logger.exception("Light refresh 실패: %s", ticker.symbol)
     finally:
         db.close()
     logger.info("Light refresh job complete")
+
+
+def _refresh_portfolio_quote(db, ticker: Ticker) -> bool:
+    """yfinance/Yahoo quote로 Portfolio 현재가와 일간 등락률만 갱신."""
+    from services.market_data import get_yahoo_quote
+
+    symbols = [ticker.symbol]
+    if ticker.market.value == "KR_Stock":
+        base = ticker.symbol.zfill(6)
+        symbols = [f"{base}.KS", f"{base}.KQ"]
+
+    quote = None
+    for yf_symbol in symbols:
+        quote = get_yahoo_quote(yf_symbol)
+        if quote and quote.get("price"):
+            break
+
+    if not quote or not quote.get("price"):
+        logger.debug("Portfolio quote empty: %s", ticker.symbol)
+        return False
+
+    portfolio = db.query(Portfolio).filter(Portfolio.ticker_id == ticker.id).first()
+    if not portfolio:
+        return False
+
+    portfolio.current_price = quote["price"]
+    portfolio.daily_pct = quote.get("change_pct") or 0
+    portfolio.updated_at = datetime.utcnow()
+    db.commit()
+    logger.debug(
+        "Portfolio quote updated: %s price=%s daily_pct=%s",
+        ticker.symbol,
+        portfolio.current_price,
+        portfolio.daily_pct,
+    )
+    return True
 
 
 def _refresh_light_cache(db, symbol: str, ticker_id: str, market: str = "US_Stock", company_name: str = ""):

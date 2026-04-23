@@ -339,12 +339,21 @@ def generate_daily_briefing(
     skill = _load_skill("daily-briefing")
     system_prompt = skill["instructions"]
 
+    def fmt_price(t: dict) -> str:
+        price = t.get("current_price")
+        if price is None:
+            return ""
+        if t.get("market") == "KR_Stock":
+            return f"{price:,.0f}원"
+        return f"${price:,.2f}"
+
     def fmt_ticker(t: dict) -> str:
         line = f"- **{t['symbol']}** ({t['name']}): thesis={t.get('thesis_status', 'none')}"
-        if t.get("current_price"):
+        price = fmt_price(t)
+        if price:
             pct = t.get("daily_pct", 0) or 0
             sign = "+" if pct >= 0 else ""
-            line += f" | 현재가 ${t['current_price']:.2f} ({sign}{pct:.1f}%)"
+            line += f" | 현재가 {price} ({sign}{pct:.1f}%)"
         news = t.get("news_snippet", "")
         if news:
             line += f"\n  최근 뉴스:\n{news}"

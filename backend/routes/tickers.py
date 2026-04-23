@@ -1,5 +1,7 @@
+import copy
 import json
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Optional
@@ -17,6 +19,57 @@ from services.telegram import notify_report_generated, notify_break_monitor, not
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── 진행 상태 추적기 (in-memory, 단일 Job) ─────────────────────────────────────
+_job_lock = threading.Lock()
+_current_job: dict | None = None  # {action, items: [{ticker_id, symbol, name, status, msg}], started_at, finished_at}
+
+
+def _job_try_init(action: str, items: list[dict]) -> tuple[bool, dict | None, bool]:
+    """
+    Start a bulk job unless another one is still active.
+
+    Returns (started, existing_job, is_same_request). Repeated clicks or browser
+    retries should restore the in-flight job instead of scheduling duplicates.
+    """
+    global _current_job
+    with _job_lock:
+        if _current_job is not None and _current_job.get("finished_at") is None:
+            in_progress = any(
+                item.get("status") in {"waiting", "running"}
+                for item in _current_job.get("items", [])
+            )
+            if in_progress:
+                existing = copy.deepcopy(_current_job)
+                existing_ids = [item.get("ticker_id") for item in existing.get("items", [])]
+                new_ids = [item.get("ticker_id") for item in items]
+                same_request = existing.get("action") == action and existing_ids == new_ids
+                return False, existing, same_request
+
+        _current_job = {
+            "action": action,
+            "items": [dict(item) for item in items],
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+        }
+        return True, copy.deepcopy(_current_job), False
+
+
+def _job_update(ticker_id: str, status: str, msg: str | None = None):
+    with _job_lock:
+        if _current_job is None:
+            return
+        for item in _current_job["items"]:
+            if item["ticker_id"] == ticker_id:
+                item["status"] = status
+                item["msg"] = msg
+                break
+
+
+def _job_finish():
+    with _job_lock:
+        if _current_job is not None:
+            _current_job["finished_at"] = datetime.utcnow().isoformat()
 
 
 def _format_financial_context(fin: dict) -> str:
@@ -51,6 +104,10 @@ class RefineBody(BaseModel):
 
 class BulkRefreshBody(BaseModel):
     ticker_ids: list[str]
+
+
+class BulkAnalyzeBody(BaseModel):
+    ticker_ids: list[str] = []  # 비어 있으면 thesis 없는 전체 종목
 
 
 class TickerResponse(BaseModel):
@@ -448,6 +505,15 @@ def refresh_data(ticker_id: str, background_tasks: BackgroundTasks, db: Session 
     return {"message": f"{ticker.symbol} 데이터 새로고침 시작됨"}
 
 
+@router.get("/bulk-status")
+def get_bulk_status():
+    """현재 진행 중인 bulk 작업 상태 반환. 없으면 active=False."""
+    with _job_lock:
+        if _current_job is None:
+            return {"active": False, "action": None, "items": [], "started_at": None, "finished_at": None}
+        return {"active": True, **copy.deepcopy(_current_job)}
+
+
 @router.post("/bulk-refresh", status_code=202)
 def bulk_refresh(body: BulkRefreshBody, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """선택 종목 데이터 수집을 백그라운드에서 순차 실행. 종목 간 2초 딜레이로 rate limit 보호."""
@@ -457,6 +523,13 @@ def bulk_refresh(body: BulkRefreshBody, background_tasks: BackgroundTasks, db: S
             for tid in body.ticker_ids if (t := ticker_map.get(tid)) is not None]
     if not jobs:
         return {"message": "종목을 찾을 수 없습니다.", "count": 0}
+    items = [{"ticker_id": tid, "symbol": sym, "name": name, "status": "waiting", "msg": None}
+             for tid, sym, _, name in jobs]
+    started, existing, same_request = _job_try_init("refresh", items)
+    if not started:
+        if same_request:
+            return {"message": "이미 같은 데이터 수집 작업이 진행 중입니다.", "count": len(existing["items"])}
+        raise HTTPException(status_code=409, detail="다른 일괄 작업이 진행 중입니다. 완료 후 다시 실행하세요.")
     background_tasks.add_task(_run_bulk_refresh, jobs)
     return {"message": f"{len(jobs)}개 종목 데이터 수집 시작됨", "count": len(jobs)}
 
@@ -465,8 +538,11 @@ def _run_bulk_refresh(jobs: list[tuple]):
     for i, (ticker_id, symbol, market, name) in enumerate(jobs):
         if i > 0:
             time.sleep(2)
+        _job_update(ticker_id, "running")
         logger.info("Bulk refresh: %s (%d/%d)", symbol, i + 1, len(jobs))
-        _run_refresh_data(ticker_id, symbol, market, name)
+        ok = _run_refresh_data(ticker_id, symbol, market, name)
+        _job_update(ticker_id, "done" if ok else "error")
+    _job_finish()
 
 
 @router.post("/{ticker_id}/report", status_code=202)
@@ -493,18 +569,79 @@ def create_report(ticker_id: str, background_tasks: BackgroundTasks, db: Session
     return {"message": f"{ticker.symbol} 심층 보고서 생성 시작됨 (완료 시 Telegram 알림)"}
 
 
+@router.post("/bulk-report", status_code=202)
+def bulk_report(body: BulkRefreshBody, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """선택 종목 보고서 생성을 백그라운드에서 순차 실행. 종목 간 30초 딜레이로 rate limit 보호."""
+    from models.db import FinancialCache
+
+    tickers = db.query(Ticker).filter(Ticker.id.in_(body.ticker_ids)).all()
+    ticker_map = {str(t.id): t for t in tickers}
+    jobs = []
+    for tid in body.ticker_ids:
+        t = ticker_map.get(tid)
+        if not t:
+            continue
+        thesis = db.query(Thesis).filter(Thesis.ticker_id == t.id).first()
+        has_cache = db.query(FinancialCache).filter(FinancialCache.ticker_id == t.id).first() is not None
+        jobs.append((
+            str(t.id), t.symbol, t.name, t.market.value,
+            thesis.thesis or "" if thesis else "",
+            thesis.risk or "" if thesis else "",
+            thesis.key_assumptions or "" if thesis else "",
+            thesis.valuation or "" if thesis else "",
+            has_cache,
+        ))
+    if not jobs:
+        return {"message": "종목을 찾을 수 없습니다.", "count": 0}
+    items = [{"ticker_id": j[0], "symbol": j[1], "name": j[2], "status": "waiting", "msg": None}
+             for j in jobs]
+    started, existing, same_request = _job_try_init("report", items)
+    if not started:
+        if same_request:
+            return {"message": "이미 같은 보고서 생성 작업이 진행 중입니다.", "count": len(existing["items"])}
+        raise HTTPException(status_code=409, detail="다른 일괄 작업이 진행 중입니다. 완료 후 다시 실행하세요.")
+    background_tasks.add_task(_run_bulk_report, jobs)
+    return {"message": f"{len(jobs)}개 종목 보고서 생성 시작됨 (완료 시 Telegram 알림)", "count": len(jobs)}
+
+
+def _run_bulk_report(jobs: list[tuple]):
+    for i, (ticker_id, symbol, name, market, thesis, risk, key_assumptions, valuation, has_cache) in enumerate(jobs):
+        if i > 0:
+            time.sleep(30)  # report max_tokens=16000, 종목간 30초 쿨다운
+        _job_update(ticker_id, "running")
+        logger.info("Bulk report: %s (%d/%d)", symbol, i + 1, len(jobs))
+        if not has_cache:
+            _job_update(ticker_id, "error", "재무 데이터가 없습니다. 먼저 데이터 수집을 실행하세요.")
+            continue
+        try:
+            ok = _run_report(ticker_id, symbol, name, market, thesis, risk, key_assumptions, valuation)
+            _job_update(ticker_id, "done" if ok else "error")
+        except Exception:
+            _job_update(ticker_id, "error")
+            logger.exception("Bulk report failed: %s", symbol)
+    _job_finish()
+
+
 @router.post("/bulk-analyze", status_code=202)
-def bulk_analyze(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    """thesis 내용이 없는 전체 종목 일괄 AI 분석 (백그라운드 순차 실행)."""
-    from services.agent import generate_thesis
-    tickers = db.query(Ticker).all()
-    targets = [t for t in tickers if not (t.thesis and t.thesis.thesis)]
+def bulk_analyze(body: BulkAnalyzeBody, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """선택 종목 (또는 thesis 없는 전체) 일괄 AI 분석 (백그라운드 순차 실행)."""
+    if body.ticker_ids:
+        tickers = db.query(Ticker).filter(Ticker.id.in_(body.ticker_ids)).all()
+        ticker_map = {str(t.id): t for t in tickers}
+        targets = [ticker_map[tid] for tid in body.ticker_ids if tid in ticker_map]
+    else:
+        tickers = db.query(Ticker).all()
+        targets = [t for t in tickers if not (t.thesis and t.thesis.thesis)]
     if not targets:
-        return {"message": "미분석 종목이 없습니다.", "count": 0}
-    jobs = [
-        (str(t.id), t.symbol, t.name, t.market.value)
-        for t in targets
-    ]
+        return {"message": "분석 대상 종목이 없습니다.", "count": 0}
+    jobs = [(str(t.id), t.symbol, t.name, t.market.value) for t in targets]
+    items = [{"ticker_id": j[0], "symbol": j[1], "name": j[2], "status": "waiting", "msg": None}
+             for j in jobs]
+    started, existing, same_request = _job_try_init("analyze", items)
+    if not started:
+        if same_request:
+            return {"message": "이미 같은 Thesis 생성 작업이 진행 중입니다.", "count": len(existing["items"])}
+        raise HTTPException(status_code=409, detail="다른 일괄 작업이 진행 중입니다. 완료 후 다시 실행하세요.")
     background_tasks.add_task(_run_bulk_analyze, jobs)
     return {"message": f"{len(jobs)}개 종목 분석 시작됨", "count": len(jobs)}
 
@@ -513,10 +650,13 @@ def _run_bulk_analyze(jobs: list[tuple]):
     from models.db import SessionLocal
     from services.agent import generate_thesis
     from services.financial_data import fetch_all
-    for ticker_id, symbol, name, market in jobs:
+    for i, (ticker_id, symbol, name, market) in enumerate(jobs):
+        if i > 0:
+            time.sleep(20)  # thesis max_tokens=4096, 종목간 20초 쿨다운
+        _job_update(ticker_id, "running")
         db = SessionLocal()
         try:
-            logger.info("Bulk analyze: %s", symbol)
+            logger.info("Bulk analyze: %s (%d/%d)", symbol, i + 1, len(jobs))
             try:
                 fin = fetch_all(symbol, ticker_id=ticker_id, db=db, market=market, company_name=name)
                 financial_context = _format_financial_context(fin) if fin.get("has_data") else ""
@@ -534,11 +674,14 @@ def _run_bulk_analyze(jobs: list[tuple]):
             thesis.valuation = sections.get("valuation")
             thesis.last_analyzed_at = datetime.utcnow()
             db.commit()
+            _job_update(ticker_id, "done")
             logger.info("Bulk analyze done: %s", symbol)
         except Exception:
+            _job_update(ticker_id, "error")
             logger.exception("Bulk analyze failed: %s", symbol)
         finally:
             db.close()
+    _job_finish()
 
 
 def _run_refresh_data(ticker_id: str, symbol: str, market: str = "US_Stock", name: str = "") -> bool:
@@ -577,7 +720,7 @@ def _run_refresh_data(ticker_id: str, symbol: str, market: str = "US_Stock", nam
 def _run_report(
     ticker_id: str, symbol: str, name: str, market: str,
     thesis: str, risk: str, key_assumptions: str, valuation: str,
-):
+) -> bool:
     from models.db import SessionLocal
 
     db = SessionLocal()
@@ -598,7 +741,9 @@ def _run_report(
         logger.info("Deep report saved for %s", symbol)
         summary = sections.get("investment_conclusion", sections.get("business_overview", ""))[:300]
         notify_report_generated(symbol, name, summary, report_id=str(report.id))
+        return True
     except Exception:
         logger.exception("Report generation failed for %s", symbol)
+        return False
     finally:
         db.close()

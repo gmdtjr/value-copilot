@@ -10,6 +10,7 @@ from routes.portfolio import router as portfolio_router
 from routes.market import router as market_router
 from routes.settings import router as settings_router
 from routes.tradelog import router as tradelog_router
+from routes.ideas import router as ideas_router
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ app.include_router(portfolio_router, prefix="/api/portfolio", tags=["portfolio"]
 app.include_router(market_router, prefix="/api/market", tags=["market"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(tradelog_router, prefix="/api/tradelog", tags=["tradelog"])
+app.include_router(ideas_router, prefix="/api/ideas", tags=["ideas"])
 
 
 @app.on_event("startup")
@@ -94,6 +96,16 @@ async def startup():
                 note TEXT,
                 detected_at TIMESTAMP DEFAULT now(),
                 noted_at TIMESTAMP
+            );
+        """))
+        # idea_memos 테이블
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS idea_memos (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                content TEXT NOT NULL,
+                ticker_symbol VARCHAR(20),
+                created_at TIMESTAMP DEFAULT now(),
+                updated_at TIMESTAMP DEFAULT now()
             );
         """))
         conn.commit()

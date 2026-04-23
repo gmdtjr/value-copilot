@@ -466,9 +466,10 @@ def _fetch_us_yfinance(ticker: str) -> dict:
             logger.warning("yfinance balance failed %s: %s", ticker, e)
 
         # ── Metrics ───────────────────────────────────────────────────────────
+        is_etf = info.get('quoteType') == 'ETF'
         km = {
-            'market_cap':                       info.get('marketCap'),
-            'market_capitalization':            info.get('marketCap'),
+            'market_cap':                       info.get('marketCap') or info.get('totalAssets'),
+            'market_capitalization':            info.get('marketCap') or info.get('totalAssets'),
             'enterprise_value':                 info.get('enterpriseValue'),
             'price_to_earnings_ratio':          info.get('trailingPE') or info.get('forwardPE'),
             'price_to_book_ratio':              info.get('priceToBook'),
@@ -482,7 +483,7 @@ def _fetch_us_yfinance(ticker: str) -> dict:
             'revenue_growth':                   info.get('revenueGrowth'),
             'earnings_growth':                  info.get('earningsGrowth'),
             'dividend_yield':                   info.get('dividendYield'),
-            'current_price':                    info.get('currentPrice') or info.get('regularMarketPrice'),
+            'current_price':                    info.get('currentPrice') or info.get('regularMarketPrice') or info.get('navPrice'),
             'debt_to_equity':                   (info.get('debtToEquity') or 0) / 100 if info.get('debtToEquity') else None,
             'current_ratio':                    info.get('currentRatio'),
             'earnings_per_share':               info.get('trailingEps'),
@@ -493,7 +494,29 @@ def _fetch_us_yfinance(ticker: str) -> dict:
         if fcf_ttm and mktcap:
             km['free_cash_flow_yield'] = fcf_ttm / mktcap
 
-        key_metrics_text = f"""
+        if is_etf:
+            total_assets = info.get('totalAssets')
+            nav = info.get('navPrice') or info.get('regularMarketPrice')
+            etf_yield = info.get('yield') or info.get('trailingAnnualDividendYield')
+            ytd_return = info.get('ytdReturn')
+            three_yr = info.get('threeYearAverageReturn')
+            five_yr = info.get('fiveYearAverageReturn')
+            beta = info.get('beta3Year') or info.get('beta')
+            category = info.get('category', 'N/A')
+            fund_family = info.get('fundFamily', 'N/A')
+            w52_high = info.get('fiftyTwoWeekHigh')
+            w52_low = info.get('fiftyTwoWeekLow')
+            key_metrics_text = f"""
+  ETF 기본정보 : 운용사 {fund_family} | 카테고리 {category}
+  규모         : 총자산 {_B(total_assets)} | NAV {_dollar(nav)}
+  수익률       : YTD {_pct(ytd_return)} | 3Y평균 {_pct(three_yr)} | 5Y평균 {_pct(five_yr)}
+  수익/위험    : 분배율 {_pct(etf_yield)} | 베타(3Y) {_x(beta)}
+  52주         : 고가 {_dollar(w52_high)} | 저가 {_dollar(w52_low)}
+  현재가       : {_dollar(km.get('current_price'))}
+  Source       : Yahoo Finance (ETF)
+"""
+        else:
+            key_metrics_text = f"""
   Valuation   : Market Cap {_B(km.get('market_cap'))} | EV {_B(km.get('enterprise_value'))}
                 P/E {_x(km.get('price_to_earnings_ratio'))} | P/B {_x(km.get('price_to_book_ratio'))}
                 P/S {_x(km.get('price_to_sales_ratio'))} | EV/EBITDA {_x(km.get('enterprise_value_to_ebitda_ratio'))}
@@ -537,16 +560,24 @@ def _fetch_us_yfinance(ticker: str) -> dict:
             logger.warning("yfinance news failed %s: %s", ticker, e)
 
         # ── Company info ──────────────────────────────────────────────────────
-        company_text = (
-            f"  Sector: {info.get('sector', 'N/A')} | Industry: {info.get('industry', 'N/A')}"
-            f" | Exchange: {info.get('exchange', 'N/A')}"
-            f" | Location: {info.get('city', 'N/A')}, {info.get('country', 'N/A')}"
-        )
+        if is_etf:
+            company_text = (
+                f"  Type: ETF | Fund Family: {info.get('fundFamily', 'N/A')}"
+                f" | Category: {info.get('category', 'N/A')}"
+                f" | Exchange: {info.get('exchange', 'N/A')}"
+                f" | Currency: {info.get('currency', 'N/A')}"
+            )
+        else:
+            company_text = (
+                f"  Sector: {info.get('sector', 'N/A')} | Industry: {info.get('industry', 'N/A')}"
+                f" | Exchange: {info.get('exchange', 'N/A')}"
+                f" | Location: {info.get('city', 'N/A')}, {info.get('country', 'N/A')}"
+            )
 
         # EDGAR filing refs — SEC 파이프라인이 이걸 보고 10-K/10-Q 요약 실행
-        filing_refs = _get_edgar_filing_refs(ticker)
+        filing_refs = [] if is_etf else _get_edgar_filing_refs(ticker)
 
-        has_data = bool(income_rows or km.get('market_cap'))
+        has_data = bool(income_rows or km.get('market_cap') or km.get('current_price'))
         return {
             "income_table":   "\n".join(income_rows) or "  데이터 없음",
             "cf_table":       "\n".join(cf_rows) or "  데이터 없음",

@@ -38,6 +38,7 @@ value-copilot/
 │   │   ├── reports.py              # 보고서 관리 + 트리거 + discovery + portfolio-review
 │   │   ├── portfolio.py            # KIS 동기화 트리거 + 거래 감지
 │   │   ├── tradelog.py             # 투자 일지 CRUD (GET/PATCH note/DELETE)
+│   │   ├── ideas.py                # 아이디어 메모 CRUD (GET/POST/PATCH/DELETE)
 │   │   ├── market.py               # 시장 지표 API
 │   │   └── settings.py             # 설정 조회/수정 + system-info
 │   ├── services/
@@ -73,7 +74,7 @@ value-copilot/
         │   ├── Dashboard.tsx       # 포트폴리오/관심 섹션 + bulk 작업 + 설정 모달
         │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 (재무제표/지표/공시 요약)
         │   ├── Reports.tsx         # 보고서 히스토리 + 읽음관리 + 코멘트 + 종류 필터 + 복수삭제
-        │   └── Journal.tsx         # 투자 일지 (KIS 동기화 거래 자동감지 + 메모 작성)
+        │   └── Journal.tsx         # 거래일지 탭 (KIS 동기화 거래 + 메모) + 아이디어 탭 (자유 메모)
         ├── api.ts
         └── types.ts
 ```
@@ -172,6 +173,14 @@ Settings:
   key: str (PK)        # us_data_source
   value: str           # yfinance | financialdatasets
   updated_at: datetime
+
+# IdeaMemo — 자유 형식 투자 아이디어 메모
+IdeaMemo:
+  id: uuid
+  content: text                  # 메모 본문
+  ticker_symbol: str | null      # 선택적 종목 태그 (DB 종목과 무관한 자유 입력, 대문자 저장)
+  created_at: datetime
+  updated_at: datetime
 ```
 
 ---
@@ -244,8 +253,11 @@ Rate limit 보호:
   → Telegram notify_trades_detected + /journal 딥링크
 
 [투자 일지] (/journal)
-  TradeLog 목록 (날짜별 그룹, 미작성 강조)
-  → 인라인 메모 작성 (note + noted_at 저장)
+  거래일지 탭: TradeLog 목록 (날짜별 그룹, 미작성 강조)
+    → 인라인 메모 작성 (note + noted_at 저장)
+  아이디어 탭: IdeaMemo 자유 메모 (상단 작성 폼 + 날짜별 그룹)
+    → 종목 태그 선택 가능 (DB 미등록 종목도 허용)
+    → 카드 호버 시 수정/삭제 버튼 노출
 
 [매일 자동]
   06:00  light_refresh  : news/metrics/insider_trades 갱신
@@ -307,7 +319,7 @@ Frontend   React 18 + TypeScript + Vite + Tailwind CSS
 
 Backend    Python 3.11 + FastAPI + SSE
            APScheduler (06:00 / 07:00 / 08:00 KST 3개 job)
-           7개 라우터: tickers / thesis / reports / portfolio / tradelog / market / settings
+           8개 라우터: tickers / thesis / reports / portfolio / tradelog / ideas / market / settings
 
 Agent      Anthropic API
            - claude-sonnet-4-6: thesis/report/break_monitor/briefing/discovery/portfolio-review/macro
@@ -317,12 +329,14 @@ Agent      Anthropic API
            .scratchpad/*.jsonl 로깅
 
 DB         PostgreSQL 15 (프로덕션: EC2 3.26.145.173)
-           10개 테이블: tickers / theses / reports / report_comments /
-                        portfolios / trade_logs / financial_cache /
+           11개 테이블: tickers / theses / reports / report_comments /
+                        portfolios / trade_logs / idea_memos / financial_cache /
                         sec_filing_summaries / settings / (내부: alembic 없음, startup 마이그레이션)
-           startup 시 자동 마이그레이션: is_read 컬럼, report_comments, trade_logs 테이블
+           startup 시 자동 마이그레이션: is_read 컬럼, report_comments, trade_logs, idea_memos 테이블
 
 External   yfinance: US 기본 소스 (재무제표+지표+뉴스 통합, 24h TTL)
+                    ETF 감지(quoteType=ETF) 시 ETF 전용 metrics 수집 (totalAssets/NAV/yield/beta 등)
+                    ETF는 재무제표 없음 → income/cf/bs 빈값 정상. EDGAR 파이프라인 미실행.
                     KR 시장 지표 (KOSPI=.KS / KOSDAQ=.KQ 자동 판별)
            financialdatasets.ai: US 선택 소스 (Settings 전환, 한도 초과 시 yfinance fallback)
            SEC EDGAR: 10-K/10-Q HTML (submissions API → primary doc)
@@ -429,5 +443,7 @@ docker compose up -d --build  # 의존성 변경 후
 - **마크다운 렌더링**: 모든 LLM 생성 텍스트는 Markdown.tsx로 렌더링. `<section>` 태그 자동 strip. 스트리밍 중은 `<pre>` 유지
 - **보고서 섹션 뷰**: 5개 타입 모두 전용 아코디언 뷰 (daily_brief/macro/analysis/discovery/portfolio_review)
 - **Telegram 딥링크**: APP_URL 환경변수 필수. 미설정 시 `http://3.26.145.173` fallback
+- **ETF 종목 (SHV 등)**: quoteType=ETF 감지 시 재무제표 없음이 정상. totalAssets/NAV/yield/beta 기반 ETF 전용 metrics 표시. EDGAR 파이프라인 미실행. has_data는 current_price 기준으로 판단.
+- **아이디어 메모**: `/api/ideas` CRUD. ticker_symbol은 DB 종목 FK 없이 자유 텍스트 (대문자). Journal 페이지의 아이디어 탭에서 관리.
 - **자동매매 코드 작성 금지**
 - **Thesis confirmed 변경은 반드시 사람의 명시적 액션으로만**

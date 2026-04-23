@@ -186,3 +186,14 @@ class TradeLog(Base):
     note = Column(Text, nullable=True)
     detected_at = Column(DateTime, default=datetime.utcnow)
     noted_at = Column(DateTime, nullable=True)
+
+
+class IdeaMemo(Base):
+    """자유 형식 투자 아이디어 메모. 종목 태그는 선택."""
+    __tablename__ = "idea_memos"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    content = Column(Text, nullable=False)
+    ticker_symbol = Column(String(20), nullable=True)  # DB 종목과 무관한 자유 태그
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

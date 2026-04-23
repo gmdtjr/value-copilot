@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Sparkles, Settings, BookOpen } from 'lucide-react'
 import { api } from '../api'
@@ -44,6 +44,12 @@ const STATUS_LABEL: Record<string, string> = {
   needs_review: '재검토',
 }
 
+const WATCHLIST_STATUS_ORDER: Record<string, number> = {
+  confirmed: 0,
+  draft: 1,
+  needs_review: 2,
+}
+
 type BulkAction = 'refresh' | 'analyze' | 'report'
 type JobStatus = 'waiting' | 'running' | 'done' | 'error'
 
@@ -77,6 +83,7 @@ export default function Dashboard() {
   const [bulkRunning, setBulkRunning] = useState(false)
   const [bulkAction, setBulkAction] = useState<BulkAction | null>(null)
   const [jobStatuses, setJobStatuses] = useState<Record<string, JobState>>({})
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     api.getTickers()
@@ -95,7 +102,56 @@ export default function Dashboard() {
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (d) setSysInfo(d) })
       .catch(() => null)
+    // 진행 중인 bulk 작업 복원
+    restoreBulkStatus()
+    return () => stopPolling()
   }, [])
+
+  // ── Bulk status polling ────────────────────────────────────────────────────
+
+  function applyBulkStatus(data: any) {
+    if (!data.active || !data.items?.length) return
+    const statuses: Record<string, JobState> = {}
+    for (const item of data.items) {
+      statuses[item.ticker_id] = { status: item.status as JobStatus, msg: item.msg ?? undefined }
+    }
+    setJobStatuses(statuses)
+    setBulkAction(data.action as BulkAction)
+  }
+
+  async function restoreBulkStatus() {
+    try {
+      const res = await fetch('/api/tickers/bulk-status')
+      if (!res.ok) return
+      const data = await res.json()
+      if (!data.active || !data.items?.length) return
+      applyBulkStatus(data)
+      const allDone = data.items.every((i: any) => i.status === 'done' || i.status === 'error')
+      if (!allDone) startPolling()
+    } catch { /* ignore */ }
+  }
+
+  function startPolling() {
+    if (pollRef.current) return
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch('/api/tickers/bulk-status')
+        if (!res.ok) return
+        const data = await res.json()
+        if (!data.active) { stopPolling(); return }
+        applyBulkStatus(data)
+        const allDone = data.items.every((i: any) => i.status === 'done' || i.status === 'error')
+        if (allDone) {
+          stopPolling()
+          api.getTickers().then(setTickers)
+        }
+      } catch { /* ignore */ }
+    }, 5000)
+  }
+
+  function stopPolling() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+  }
 
   async function saveSetting(key: string, value: string) {
     setSavingSettings(true)
@@ -134,125 +190,38 @@ export default function Dashboard() {
   }
 
   async function runBulkAction(action: BulkAction) {
+    const activeJob = Object.values(jobStatuses).some(j => j.status === 'running' || j.status === 'waiting')
+    if (bulkRunning || activeJob) return
+
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
 
-    const initial: Record<string, JobState> = {}
-    for (const id of ids) initial[id] = { status: 'waiting' }
-    setJobStatuses(initial)
     setBulkAction(action)
     setBulkRunning(true)
+    stopPolling()
 
-    if (action === 'refresh') {
-      const res = await fetch('/api/tickers/bulk-refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ticker_ids: ids }),
-      })
-      if (!res.ok) {
-        setJobStatuses(prev => {
-          const next = { ...prev }
-          for (const id of ids) next[id] = { status: 'error', msg: `HTTP ${res.status}` }
-          return next
-        })
-        setBulkRunning(false)
-        return
-      }
-      // 서버에서 백그라운드 처리 — 페이지 닫아도 됨
-      setJobStatuses(prev => {
-        const next = { ...prev }
-        for (const id of ids) next[id] = { status: 'running' }
-        return next
-      })
-      setBulkRunning(false)
+    const endpoints: Record<BulkAction, string> = {
+      refresh: '/api/tickers/bulk-refresh',
+      analyze: '/api/tickers/bulk-analyze',
+      report:  '/api/tickers/bulk-report',
+    }
+    const res = await fetch(endpoints[action], {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker_ids: ids }),
+    })
+    setBulkRunning(false)
 
-      // 15초마다 data-status 폴링 → 완료된 종목 마킹
-      const done = new Set<string>()
-      const maxPolls = ids.length * 8  // 종목당 최대 2분
-      let pollCount = 0
-      const timer = setInterval(async () => {
-        pollCount++
-        const remaining = ids.filter(id => !done.has(id))
-        await Promise.all(remaining.map(async (id) => {
-          try {
-            const r = await fetch(`/api/tickers/${id}/data-status`)
-            if (r.ok) {
-              const d = await r.json()
-              if (d.has_data) {
-                done.add(id)
-                setJobStatuses(prev => ({ ...prev, [id]: { status: 'done' } }))
-              }
-            }
-          } catch { /* ignore */ }
-        }))
-        if (done.size === ids.length || pollCount >= maxPolls) {
-          clearInterval(timer)
-          setJobStatuses(prev => {
-            const next = { ...prev }
-            for (const id of ids)
-              if (next[id]?.status === 'running') next[id] = { status: 'done' }
-            return next
-          })
-          api.getTickers().then(setTickers)
-        }
-      }, 15000)
+    if (!res.ok) {
+      const initial: Record<string, JobState> = {}
+      for (const id of ids) initial[id] = { status: 'error', msg: `HTTP ${res.status}` }
+      setJobStatuses(initial)
       return
-    } else {
-      // analyze / report: per-ticker 순차 처리
-      for (const id of ids) {
-        setJobStatuses(prev => ({ ...prev, [id]: { status: 'running' } }))
-        try {
-          if (action === 'analyze') {
-            await new Promise<void>((resolve) => {
-              fetch(`/api/tickers/${id}/analyze`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ feedback: '' }),
-              }).then(async (res) => {
-                if (!res.ok || !res.body) {
-                  setJobStatuses(prev => ({ ...prev, [id]: { status: 'error', msg: `HTTP ${res.status}` } }))
-                  resolve()
-                  return
-                }
-                const reader = res.body.getReader()
-                const dec = new TextDecoder()
-                let finished = false
-                while (!finished) {
-                  const { value, done } = await reader.read()
-                  if (done) { finished = true; break }
-                  const text = dec.decode(value)
-                  for (const line of text.split('\n')) {
-                    if (!line.startsWith('data: ')) continue
-                    try {
-                      const evt = JSON.parse(line.slice(6))
-                      if (evt.type === 'complete') {
-                        setJobStatuses(prev => ({ ...prev, [id]: { status: 'done' } }))
-                        finished = true
-                      } else if (evt.type === 'error') {
-                        setJobStatuses(prev => ({ ...prev, [id]: { status: 'error', msg: evt.message } }))
-                        finished = true
-                      }
-                    } catch { /* ignore parse errors */ }
-                  }
-                }
-                resolve()
-              }).catch((err) => {
-                setJobStatuses(prev => ({ ...prev, [id]: { status: 'error', msg: String(err) } }))
-                resolve()
-              })
-            })
-          } else if (action === 'report') {
-            const res = await fetch(`/api/tickers/${id}/report`, { method: 'POST' })
-            setJobStatuses(prev => ({ ...prev, [id]: { status: res.ok ? 'done' : 'error' } }))
-          }
-        } catch {
-          setJobStatuses(prev => ({ ...prev, [id]: { status: 'error' } }))
-        }
-      }
     }
 
-    setBulkRunning(false)
-    api.getTickers().then(setTickers)
+    // 백엔드가 job_init까지 완료한 상태 — 즉시 상태 조회 후 polling 시작
+    await restoreBulkStatus()
+    startPolling()
   }
 
   async function toggleDailyAlert(ticker: Ticker) {
@@ -321,6 +290,7 @@ export default function Dashboard() {
 
   const jobTickerIds = Object.keys(jobStatuses)
   const showProgress = jobTickerIds.length > 0
+  const bulkInProgress = Object.values(jobStatuses).some(j => j.status === 'running' || j.status === 'waiting')
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -406,14 +376,14 @@ export default function Dashboard() {
               <div className="flex-1" />
               <button
                 onClick={() => runBulkAction('refresh')}
-                disabled={bulkRunning}
+                disabled={bulkRunning || bulkInProgress}
                 className="flex items-center gap-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
                 데이터 수집
               </button>
               <button
                 onClick={() => runBulkAction('analyze')}
-                disabled={bulkRunning}
+                disabled={bulkRunning || bulkInProgress}
                 className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
                 <Sparkles size={13} />
@@ -421,7 +391,7 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => runBulkAction('report')}
-                disabled={bulkRunning}
+                disabled={bulkRunning || bulkInProgress}
                 className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
                 <TrendingUp size={13} />
@@ -663,7 +633,7 @@ export default function Dashboard() {
                 <section>
                   <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">⏰ 자동 스케줄</p>
                   <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
-                    <PipelineRow label="06:00 KST" value="light_refresh — news / metrics / insider_trades 갱신" />
+                    <PipelineRow label="06:00 KST" value="light_refresh — news / metrics / insider_trades + 포트폴리오 현재가/일간등락 갱신" />
                     <PipelineRow label="07:00 KST" value="daily_briefing — 뉴스 + 포트폴리오 + 매크로 브리핑" />
                     <PipelineRow label="08:00 KST" value="break_monitor — confirmed 종목 thesis 이탈 감지" />
                   </div>
@@ -736,8 +706,8 @@ export default function Dashboard() {
                 <span className="text-xs text-gray-500">
                   ({Object.values(jobStatuses).filter(j => j.status === 'done').length}/{jobTickerIds.length} 완료)
                 </span>
-                {bulkAction === 'refresh' && Object.values(jobStatuses).some(j => j.status === 'running') && (
-                  <span className="text-xs text-gray-500">· 페이지 닫아도 됩니다</span>
+                {Object.values(jobStatuses).some(j => j.status === 'running' || j.status === 'waiting') && (
+                  <span className="text-xs text-gray-500">· 페이지 이동해도 계속 진행됩니다</span>
                 )}
               </div>
               {!bulkRunning && (
@@ -797,8 +767,27 @@ export default function Dashboard() {
         )}
 
         {tickers.length > 0 && (() => {
-          const portfolio = tickers.filter(t => t.status === 'portfolio')
-          const watchlist = tickers.filter(t => t.status === 'watchlist')
+          const portfolio = tickers
+            .filter(t => t.status === 'portfolio')
+            .sort((a, b) => {
+              const aReview = a.thesis_status === 'needs_review' ? 0 : 1
+              const bReview = b.thesis_status === 'needs_review' ? 0 : 1
+              if (aReview !== bReview) return aReview - bReview
+
+              const aMove = Math.abs(a.portfolio_daily_pct ?? 0)
+              const bMove = Math.abs(b.portfolio_daily_pct ?? 0)
+              if (aMove !== bMove) return bMove - aMove
+
+              return a.symbol.localeCompare(b.symbol)
+            })
+          const watchlist = tickers
+            .filter(t => t.status === 'watchlist')
+            .sort((a, b) => {
+              const aStatus = WATCHLIST_STATUS_ORDER[a.thesis_status ?? ''] ?? 3
+              const bStatus = WATCHLIST_STATUS_ORDER[b.thesis_status ?? ''] ?? 3
+              if (aStatus !== bStatus) return aStatus - bStatus
+              return a.symbol.localeCompare(b.symbol)
+            })
 
           function TickerCard({ ticker }: { ticker: typeof tickers[0] }) {
             const p = ticker.status === 'portfolio' && ticker.portfolio_current_price != null
