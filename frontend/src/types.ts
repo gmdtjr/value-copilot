@@ -1,6 +1,7 @@
 export type Market = 'US_Stock' | 'KR_Stock'
 export type TickerStatus = 'portfolio' | 'watchlist'
 export type ThesisStatus = 'draft' | 'confirmed' | 'needs_review'
+export type StockType = 'compounding' | 'growth' | 'asset_play' | 'turnaround' | 'cyclical' | 'special_situation'
 
 export interface Ticker {
   id: string
@@ -17,6 +18,7 @@ export interface Ticker {
   portfolio_current_price: number | null
   portfolio_daily_pct: number | null
   portfolio_pnl_pct: number | null
+  valley_url?: string | null
 }
 
 export interface Thesis {
@@ -29,6 +31,8 @@ export interface Thesis {
   key_assumptions: string | null
   valuation: string | null
   last_analyzed_at: string | null
+  stock_type: StockType | null
+  seed_memo: string | null
 }
 
 export interface SecSummary {

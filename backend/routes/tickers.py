@@ -16,6 +16,7 @@ from models.db import (
 )
 from services.agent import generate_thesis_stream, refine_thesis_stream, generate_ticker_report, run_break_monitor
 from services.telegram import notify_report_generated, notify_break_monitor, notify_thesis_needs_review
+from services.valley import get_cached_valley_url, resolve_valley_url, resolve_valley_url_with_reason
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -98,6 +99,11 @@ class TickerPatch(BaseModel):
     daily_alert: Optional[bool] = None
 
 
+class AnalyzeBody(BaseModel):
+    stock_type: str
+    seed_memo: str
+
+
 class RefineBody(BaseModel):
     feedback: str
 
@@ -126,6 +132,7 @@ class TickerResponse(BaseModel):
     portfolio_current_price: Optional[float] = None
     portfolio_daily_pct: Optional[float] = None
     portfolio_pnl_pct: Optional[float] = None
+    valley_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -140,8 +147,13 @@ def list_tickers(db: Session = Depends(get_db)):
     for t in tickers:
         p = t.portfolio
         pnl_pct = None
+        daily_pct = p.daily_pct if p else None
         if p and p.avg_price and p.current_price:
             pnl_pct = (p.current_price - p.avg_price) / p.avg_price * 100
+            # 과거 KIS 동기화가 평가손익률(evlu_pfls_rt)을 daily_pct에 저장한 적이 있음.
+            # 그 값이 총 수익률과 사실상 같으면 일일 등락률로 내려보내지 않는다.
+            if daily_pct is not None and abs(daily_pct - pnl_pct) < 0.05 and abs(daily_pct) > 50:
+                daily_pct = None
         result.append(TickerResponse(
             id=str(t.id),
             symbol=t.symbol,
@@ -155,8 +167,9 @@ def list_tickers(db: Session = Depends(get_db)):
             portfolio_quantity=p.quantity if p else None,
             portfolio_avg_price=p.avg_price if p else None,
             portfolio_current_price=p.current_price if p else None,
-            portfolio_daily_pct=p.daily_pct if p else None,
+            portfolio_daily_pct=daily_pct,
             portfolio_pnl_pct=pnl_pct,
+            valley_url=get_cached_valley_url(db, str(t.id)),
         ))
     return result
 
@@ -251,7 +264,7 @@ def _run_break_monitor_task(ticker_id: str, symbol: str, name: str, thesis: str,
 
 
 @router.post("/{ticker_id}/analyze")
-def analyze_ticker(ticker_id: str, db: Session = Depends(get_db)):
+def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_db)):
     """SSE 스트림으로 Thesis AI 초안 생성. 완료 시 DB 저장."""
     from services.financial_data import fetch_all
 
@@ -286,6 +299,8 @@ def analyze_ticker(ticker_id: str, db: Session = Depends(get_db)):
                 market=ticker.market.value,
                 ticker_id=str(ticker.id),
                 financial_context=financial_context,
+                stock_type=body.stock_type,
+                seed_memo=body.seed_memo,
             ):
                 # Extract sections from complete event
                 if sse_str.startswith("data:"):
@@ -310,6 +325,8 @@ def analyze_ticker(ticker_id: str, db: Session = Depends(get_db)):
                 thesis.risk = sections.get("risk")
                 thesis.key_assumptions = sections.get("key_assumptions")
                 thesis.valuation = sections.get("valuation")
+                thesis.stock_type = body.stock_type
+                thesis.seed_memo = body.seed_memo
                 was_confirmed = thesis.confirmed == ThesisStatusEnum.CONFIRMED
                 thesis.confirmed = (
                     ThesisStatusEnum.NEEDS_REVIEW if was_confirmed else ThesisStatusEnum.DRAFT
@@ -646,6 +663,26 @@ def bulk_analyze(body: BulkAnalyzeBody, background_tasks: BackgroundTasks, db: S
     return {"message": f"{len(jobs)}개 종목 분석 시작됨", "count": len(jobs)}
 
 
+@router.post("/bulk-resolve-valley", status_code=202)
+def bulk_resolve_valley(body: BulkRefreshBody, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """선택 종목의 Valley 링크를 백그라운드에서 조회/캐시."""
+    tickers = db.query(Ticker).filter(Ticker.id.in_(body.ticker_ids)).all()
+    ticker_map = {str(t.id): t for t in tickers}
+    jobs = [(str(t.id), t.symbol, t.name, t.market.value)
+            for tid in body.ticker_ids if (t := ticker_map.get(tid)) is not None]
+    if not jobs:
+        return {"message": "종목을 찾을 수 없습니다.", "count": 0}
+    items = [{"ticker_id": j[0], "symbol": j[1], "name": j[2], "status": "waiting", "msg": None}
+             for j in jobs]
+    started, existing, same_request = _job_try_init("valley", items)
+    if not started:
+        if same_request:
+            return {"message": "이미 같은 Valley 링크 조회 작업이 진행 중입니다.", "count": len(existing["items"])}
+        raise HTTPException(status_code=409, detail="다른 일괄 작업이 진행 중입니다. 완료 후 다시 실행하세요.")
+    background_tasks.add_task(_run_bulk_resolve_valley, jobs)
+    return {"message": f"{len(jobs)}개 종목 Valley 링크 조회 시작됨", "count": len(jobs)}
+
+
 def _run_bulk_analyze(jobs: list[tuple]):
     from models.db import SessionLocal
     from services.agent import generate_thesis
@@ -662,9 +699,12 @@ def _run_bulk_analyze(jobs: list[tuple]):
                 financial_context = _format_financial_context(fin) if fin.get("has_data") else ""
             except Exception:
                 financial_context = ""
-            sections = generate_thesis(symbol=symbol, name=name, market=market,
-                                       ticker_id=ticker_id, financial_context=financial_context)
             thesis = db.query(Thesis).filter(Thesis.ticker_id == ticker_id).first()
+            existing_stock_type = thesis.stock_type if thesis and thesis.stock_type else "compounding"
+            existing_seed_memo = thesis.seed_memo or ""
+            sections = generate_thesis(symbol=symbol, name=name, market=market,
+                                       ticker_id=ticker_id, financial_context=financial_context,
+                                       stock_type=existing_stock_type, seed_memo=existing_seed_memo)
             if not thesis:
                 thesis = Thesis(ticker_id=ticker_id, confirmed=ThesisStatusEnum.DRAFT)
                 db.add(thesis)
@@ -679,6 +719,28 @@ def _run_bulk_analyze(jobs: list[tuple]):
         except Exception:
             _job_update(ticker_id, "error")
             logger.exception("Bulk analyze failed: %s", symbol)
+        finally:
+            db.close()
+    _job_finish()
+
+
+def _run_bulk_resolve_valley(jobs: list[tuple]):
+    from models.db import SessionLocal
+
+    for i, (ticker_id, symbol, name, market) in enumerate(jobs):
+        if i > 0:
+            time.sleep(2)
+        _job_update(ticker_id, "running")
+        db = SessionLocal()
+        try:
+            url, reason = resolve_valley_url_with_reason(db, ticker_id, symbol, name, market)
+            if url:
+                _job_update(ticker_id, "done")
+            else:
+                _job_update(ticker_id, "error", reason or "Valley 종목 조회 실패")
+        except Exception as e:
+            _job_update(ticker_id, "error", str(e)[:120])
+            logger.exception("Bulk valley resolve failed: %s", symbol)
         finally:
             db.close()
     _job_finish()
@@ -703,6 +765,11 @@ def _run_refresh_data(ticker_id: str, symbol: str, market: str = "US_Stock", nam
             saved = run_sec_pipeline(fin["filing_refs"], ticker_id, db)
             if saved:
                 logger.info("SEC pipeline saved %d new summaries for %s", saved, symbol)
+            # 8-K 파이프라인 (ETF 제외 — filing_refs 있으면 non-ETF)
+            from services.sec_pipeline import run_8k_pipeline
+            saved_8k = run_8k_pipeline(symbol, ticker_id, db)
+            if saved_8k:
+                logger.info("8-K pipeline saved %d new summaries for %s", saved_8k, symbol)
         elif fin.get("filing_refs") and market == "KR_Stock":
             from services.dart_pipeline import run_dart_pipeline
             saved = run_dart_pipeline(fin["filing_refs"], ticker_id, db)

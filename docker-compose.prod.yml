@@ -46,8 +46,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-    # --reload 제거, worker 수 제한 (1GB RAM)
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    # --reload 제거. bulk 작업 상태는 현재 프로세스 메모리에 있으므로 단일 worker로 고정.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
 
   nginx:
     build:

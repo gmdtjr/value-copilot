@@ -23,6 +23,8 @@ class ThesisResponse(BaseModel):
     key_assumptions: Optional[str]
     valuation: Optional[str]
     last_analyzed_at: Optional[str]
+    stock_type: Optional[str]
+    seed_memo: Optional[str]
 
 
 class ThesisPatch(BaseModel):
@@ -87,4 +89,6 @@ def _to_response(thesis: Thesis) -> ThesisResponse:
         key_assumptions=thesis.key_assumptions,
         valuation=thesis.valuation,
         last_analyzed_at=thesis.last_analyzed_at.isoformat() if thesis.last_analyzed_at else None,
+        stock_type=thesis.stock_type.value if thesis.stock_type else None,
+        seed_memo=thesis.seed_memo,
     )

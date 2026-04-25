@@ -54,6 +54,17 @@ async def startup():
     Base.metadata.create_all(bind=engine)
     # 이후 신규 enum 값 추가 (기존 DB 마이그레이션용, 신규 DB는 no-op)
     with engine.connect() as conn:
+        for _old, _new in (
+            ("ANALYSIS", "analysis"),
+            ("DAILY_BRIEF", "daily_brief"),
+            ("MACRO", "macro"),
+        ):
+            conn.execute(_text(
+                f"DO $$ BEGIN "
+                f"IF EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel='{_old}' "
+                f"AND enumtypid=(SELECT oid FROM pg_type WHERE typname='reporttypeenum')) "
+                f"THEN ALTER TYPE reporttypeenum RENAME VALUE '{_old}' TO '{_new}'; END IF; END $$;"
+            ))
         for _val in ("discovery", "portfolio_review"):
             conn.execute(_text(
                 f"DO $$ BEGIN "
@@ -108,6 +119,13 @@ async def startup():
                 updated_at TIMESTAMP DEFAULT now()
             );
         """))
+        # stock_type / seed_memo 컬럼 (Thesis)
+        conn.execute(_text(
+            "ALTER TABLE theses ADD COLUMN IF NOT EXISTS stock_type VARCHAR(50);"
+        ))
+        conn.execute(_text(
+            "ALTER TABLE theses ADD COLUMN IF NOT EXISTS seed_memo TEXT;"
+        ))
         conn.commit()
     logger.info("DB tables ready")
     from services.telegram_bot import start_bot

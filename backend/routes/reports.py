@@ -19,6 +19,7 @@ router = APIRouter()
 
 class DiscoveryRequest(BaseModel):
     idea: str
+    lens: str = "다양하게"
 
 
 class MarkReadBody(BaseModel):
@@ -33,6 +34,7 @@ class ReportResponse(BaseModel):
     id: str
     ticker_id: Optional[str]
     ticker_symbol: Optional[str]
+    ticker_name: Optional[str]
     type: str
     content: str
     created_at: str
@@ -56,7 +58,9 @@ def list_reports(db: Session = Depends(get_db), limit: int = 50):
         .all()
     )
     ticker_ids = [r.ticker_id for r in reports if r.ticker_id]
-    tickers = {t.id: t.symbol for t in db.query(Ticker).filter(Ticker.id.in_(ticker_ids)).all()}
+    ticker_rows = db.query(Ticker).filter(Ticker.id.in_(ticker_ids)).all()
+    tickers = {t.id: t.symbol for t in ticker_rows}
+    ticker_names = {t.id: t.name for t in ticker_rows}
 
     report_ids = [r.id for r in reports]
     comment_counts = dict(
@@ -71,6 +75,7 @@ def list_reports(db: Session = Depends(get_db), limit: int = 50):
             id=str(r.id),
             ticker_id=str(r.ticker_id) if r.ticker_id else None,
             ticker_symbol=tickers.get(r.ticker_id) if r.ticker_id else None,
+            ticker_name=ticker_names.get(r.ticker_id) if r.ticker_id else None,
             type=r.type.value,
             content=r.content,
             created_at=r.created_at.isoformat(),
@@ -98,11 +103,13 @@ def mark_read(report_id: str, body: MarkReadBody, db: Session = Depends(get_db))
     report.is_read = body.is_read
     db.commit()
     ticker_symbol = report.ticker.symbol if report.ticker_id and report.ticker else None
+    ticker_name = report.ticker.name if report.ticker_id and report.ticker else None
     comment_count = db.query(func.count(ReportComment.id)).filter(ReportComment.report_id == report.id).scalar()
     return ReportResponse(
         id=str(report.id),
         ticker_id=str(report.ticker_id) if report.ticker_id else None,
         ticker_symbol=ticker_symbol,
+        ticker_name=ticker_name,
         type=report.type.value,
         content=report.content,
         created_at=report.created_at.isoformat(),
@@ -172,33 +179,48 @@ def run_discovery(body: DiscoveryRequest):
     def event_stream():
         import json as _json
         captured = {"full_text": ""}
-        for event in generate_discovery_stream(idea):
+        had_error = False
+        for event in generate_discovery_stream(idea, lens=body.lens):
             yield event
             if event.startswith("data: "):
                 try:
                     data = _json.loads(event[6:])
                     if data.get("type") == "complete":
                         captured["full_text"] = data.get("full_text", "")
+                    elif data.get("type") == "error":
+                        had_error = True
                 except Exception:
                     pass
         full_text = captured["full_text"]
         if full_text:
+            db = None
             try:
                 db = SessionLocal()
                 report = Report(ticker_id=None, type=ReportTypeEnum.DISCOVERY, content=full_text)
                 db.add(report)
                 db.commit()
+                db.refresh(report)
                 report_id = str(report.id)
-                db.close()
                 yield f"data: {_json.dumps({'type': 'saved', 'report_id': report_id})}\n\n"
+                yield f"data: {_json.dumps({'type': 'done', 'report_id': report_id})}\n\n"
                 try:
                     notify_discovery_saved(report_id, idea[:80])
                 except Exception:
                     pass
             except Exception:
                 logger.exception("Discovery report DB 저장 실패")
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'DB 저장 실패'})}\n\n"
+            finally:
+                if db:
+                    db.close()
+        elif not had_error:
+            yield f"data: {_json.dumps({'type': 'error', 'message': '보고서 생성은 끝났지만 저장할 본문을 받지 못했습니다.'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/portfolio-review")
@@ -241,8 +263,13 @@ def run_portfolio_review():
                     pass
             except Exception:
                 logger.exception("Portfolio review DB 저장 실패")
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'DB 저장 실패'})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _build_portfolio_context(db) -> str:

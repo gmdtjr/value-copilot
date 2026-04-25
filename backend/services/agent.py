@@ -73,28 +73,33 @@ def _load_refs(refs_dir: Path) -> str:
 SECTION_NAMES = ["thesis", "risk", "key_assumptions", "valuation"]
 
 def _build_thesis_user_message(
-    symbol: str, name: str, market: str, financial_context: str = ""
+    symbol: str, name: str, market: str, financial_context: str = "",
+    stock_type: str = "", seed_memo: str = "",
 ) -> str:
     fin_block = (
         f"\n{financial_context}\n"
         if financial_context
         else "\n*(재무 데이터 미제공 — 공개 정보 기반으로 작성하되 불확실한 수치는 '데이터 수집 필요'로 표시)*\n"
     )
-    return f"""다음 종목의 가치투자 thesis를 생성해 주세요.
+    return f"""다음 종목의 투자 thesis를 생성해 주세요.
 
 **종목 정보**
 - 심볼: {symbol}
 - 회사명: {name}
 - 시장: {market}
-{fin_block}
-아래 4개 섹션을 각각 XML 태그로 감싸서 출력해 주세요.
-각 섹션은 마크다운으로 작성하고 충분한 분량(섹션당 최소 200자)으로 작성하세요.
-재무 데이터가 제공된 경우 실제 수치를 반드시 인용하고, valuation 섹션의 DCF 가정은 제공된 재무 데이터를 근거로 작성하세요.
+- 투자 유형 (stock_type): {stock_type}
 
-<section name="thesis">투자 논거 (핵심 thesis, 비즈니스 모델, 경쟁우위, 성장 동인)</section>
+**나의 초기 관점 (seed_memo)**
+{seed_memo}
+{fin_block}
+위 초기 관점과 투자 유형 프레임워크를 기반으로 아래 4개 섹션을 XML 태그로 감싸서 출력해 주세요.
+각 섹션은 마크다운으로 작성하고 충분한 분량(섹션당 최소 200자)으로 작성하세요.
+재무 데이터가 제공된 경우 실제 수치를 반드시 인용하고, valuation 섹션의 가정은 제공된 재무 데이터와 선택된 프레임워크를 근거로 작성하세요.
+
+<section name="thesis">투자 논거 (핵심 thesis, 비즈니스 모델, 투자 유형에 맞는 핵심 강점)</section>
 <section name="risk">주요 리스크 (사업 리스크, 재무 리스크, 시장 리스크, 외부 요인)</section>
-<section name="key_assumptions">핵심 가정 (thesis가 유효하려면 참이어야 할 조건들 — 측정 가능한 수치 기반으로)</section>
-<section name="valuation">밸류에이션 (DCF 가정, 적정가 추정, Margin of Safety)</section>
+<section name="key_assumptions">핵심 가정 (thesis가 유효하려면 참이어야 할 조건들 — 투자 유형 기준으로, 측정 가능한 수치 기반으로)</section>
+<section name="valuation">밸류에이션 (투자 유형에 맞는 방법론, 적정가 추정)</section>
 """
 
 
@@ -104,10 +109,14 @@ def generate_thesis_stream(
     market: str,
     ticker_id: str,
     financial_context: str = "",
+    stock_type: str = "compounding",
+    seed_memo: str = "",
 ) -> Iterator[str]:
     """
     Thesis 4섹션 AI 초안을 SSE 이벤트로 스트림.
     financial_context: fetch_all() 결과를 포맷한 문자열 (없으면 종목명만으로 생성).
+    stock_type: 투자 유형 (compounding/growth/asset_play/turnaround/cyclical/special_situation)
+    seed_memo: 사용자의 초기 관점 (필수)
 
     이벤트 타입:
       - start   : 생성 시작
@@ -121,7 +130,7 @@ def generate_thesis_stream(
         return
 
     _log({"event": "thesis_start", "ticker_id": ticker_id, "symbol": symbol,
-          "has_financial_data": bool(financial_context)})
+          "has_financial_data": bool(financial_context), "stock_type": stock_type})
 
     # Load skill
     try:
@@ -130,12 +139,15 @@ def generate_thesis_stream(
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         return
 
-    refs = _load_refs(skill["refs_dir"])
     system_prompt = skill["instructions"]
-    if refs:
-        system_prompt += f"\n\n---\n\n# Reference Materials\n\n{refs}"
+    # stock_type별 프레임워크 파일 동적 로드 (asset_play → asset_play.md)
+    framework_path = skill["refs_dir"] / f"{stock_type}.md"
+    if framework_path.exists():
+        framework = framework_path.read_text(encoding="utf-8")
+        system_prompt += f"\n\n---\n\n# 투자 프레임워크 ({stock_type})\n\n{framework}"
 
-    user_message = _build_thesis_user_message(symbol, name, market, financial_context)
+    user_message = _build_thesis_user_message(symbol, name, market, financial_context,
+                                               stock_type=stock_type, seed_memo=seed_memo)
 
     yield f"data: {json.dumps({'type': 'start', 'symbol': symbol})}\n\n"
 
@@ -279,22 +291,26 @@ def generate_thesis(
     market: str,
     ticker_id: str,
     financial_context: str = "",
+    stock_type: str = "compounding",
+    seed_memo: str = "",
 ) -> dict:
-    """Non-streaming version for Telegram bot. Returns sections dict."""
+    """Non-streaming version for bulk/Telegram. Returns sections dict."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
     _log({"event": "thesis_start", "ticker_id": ticker_id, "symbol": symbol, "mode": "sync",
-          "has_financial_data": bool(financial_context)})
+          "has_financial_data": bool(financial_context), "stock_type": stock_type})
 
     skill = _load_skill("thesis-generator")
-    refs = _load_refs(skill["refs_dir"])
     system_prompt = skill["instructions"]
-    if refs:
-        system_prompt += f"\n\n---\n\n# Reference Materials\n\n{refs}"
+    framework_path = skill["refs_dir"] / f"{stock_type}.md"
+    if framework_path.exists():
+        framework = framework_path.read_text(encoding="utf-8")
+        system_prompt += f"\n\n---\n\n# 투자 프레임워크 ({stock_type})\n\n{framework}"
 
-    user_message = _build_thesis_user_message(symbol, name, market, financial_context)
+    user_message = _build_thesis_user_message(symbol, name, market, financial_context,
+                                               stock_type=stock_type, seed_memo=seed_memo)
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
@@ -398,13 +414,13 @@ def generate_daily_briefing(
 
 REPORT_SECTIONS = [
     "business_overview",
-    "moat_analysis",
+    "competitive_position",
     "financial_analysis",
-    "management_quality",
+    "management_track_record",
     "valuation",
     "risk_matrix",
     "recent_developments",
-    "investment_conclusion",
+    "bull_bear_synthesis",
 ]
 
 
@@ -420,10 +436,10 @@ def generate_ticker_report(
     db=None,
 ) -> dict:
     """
-    월가 수준 심층 보고서 생성.
-    financialdatasets.ai 실제 재무 데이터 + SEC 공시 요약 + 기존 thesis 컨텍스트 활용.
-    반환: {business_overview, moat_analysis, ..., investment_conclusion, full_text}
-    참고: virattt/ai-hedge-fund, langalpha/initiating-coverage, agi-now/buffett-skills
+    종목 심층 보고서 생성.
+    실제 재무 데이터 + SEC 공시 요약 + 기존 thesis 컨텍스트 활용.
+    반환: {business_overview, competitive_position, financial_analysis, management_track_record,
+           valuation, risk_matrix, recent_developments, bull_bear_synthesis, full_text}
     """
     from services.financial_data import fetch_all
     from services.sec_pipeline import get_sec_context
@@ -443,12 +459,9 @@ def generate_ticker_report(
         "has_data": fin["has_data"],
     })
 
-    # ── 2. 스킬 로드 (buffett-skills refs 포함) ───────────────────────────────
+    # ── 2. 스킬 로드 ─────────────────────────────────────────────────────────
     skill = _load_skill("report-generator")
-    refs = _load_refs(skill["refs_dir"])
     system_prompt = skill["instructions"]
-    if refs:
-        system_prompt += f"\n\n---\n\n# Reference Materials (Buffett Investment Framework)\n\n{refs}"
 
     # ── 3. SEC 공시 요약 (DB에서 조회) ──────────────────────────────────────
     sec_context = ""
@@ -501,7 +514,7 @@ def generate_ticker_report(
 
 위 실제 데이터를 기반으로 8개 섹션을 XML 태그로 감싸서 출력해 주세요.
 각 섹션은 최소 400자 이상, 제공된 실제 수치를 반드시 인용하세요.
-Insider Trades 데이터는 management_quality 섹션에서 반드시 분석하세요.
+Insider Trades 데이터는 management_track_record 섹션에서 반드시 분석하세요.
 SEC 공시 요약이 있으면 business_overview, risk_matrix 섹션에서 반드시 인용하세요.
 데이터가 없는 항목은 "데이터 미확인"으로 명시하고 정성적 분석으로 대체하세요.
 """
@@ -539,11 +552,13 @@ def run_break_monitor(
     key_assumptions: str,
     news_context: str = "",
     metrics_context: str = "",
+    stock_type: str = "",
 ) -> dict:
     """
     Break Monitor 실행.
     news_context: FinancialCache news 데이터 포맷 문자열
     metrics_context: FinancialCache metrics TTM 포맷 문자열
+    stock_type: 투자 유형 (break 신호 분기에 사용)
     반환: {signal, assessment, assumptions_status, watch_points}
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -559,10 +574,11 @@ def run_break_monitor(
     news_block = f"\n## 최근 뉴스 (오늘 기준)\n{news_context}\n" if news_context else "\n*(뉴스 데이터 없음 — 논리적 유효성만 판단)*\n"
     metrics_block = f"\n## 현재 Key Metrics (TTM)\n{metrics_context}\n" if metrics_context else ""
 
+    stock_type_block = f"\n**투자 유형 (stock_type)**: {stock_type}\n" if stock_type else ""
     user_message = f"""다음 종목의 thesis 이탈 여부를 판단해 주세요.
 
 **종목**: {symbol} — {name}
-
+{stock_type_block}
 **기존 Thesis**
 {thesis or '(없음)'}
 
@@ -631,6 +647,8 @@ def generate_portfolio_review_stream(portfolio_context: str) -> Iterator[str]:
 {portfolio_context}
 
 5개 섹션을 XML 태그로 감싸서 출력해 주세요.
+모든 섹션을 반드시 완결해서 닫아 주세요.
+종목 탐색 보고서는 아이디어 발굴용이므로, 상세 종목 보고서처럼 과도하게 길게 쓰지 말고 핵심만 압축해 주세요.
 """
 
     yield f"data: {json.dumps({'type': 'start'})}\n\n"
@@ -641,7 +659,7 @@ def generate_portfolio_review_stream(portfolio_context: str) -> Iterator[str]:
     try:
         with client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=6000,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         ) as stream:
@@ -669,9 +687,10 @@ def generate_portfolio_review_stream(portfolio_context: str) -> Iterator[str]:
 DISCOVERY_SECTIONS = ["theme_analysis", "us_picks", "kr_picks", "screening_criteria", "next_steps"]
 
 
-def generate_discovery_stream(idea: str) -> Iterator[str]:
+def generate_discovery_stream(idea: str, lens: str = "다양하게") -> Iterator[str]:
     """
     투자 아이디어 → 미국/한국 유망 종목 탐색 보고서 SSE 스트림.
+    lens: compounding | growth | asset-play | turnaround | cyclical | special-situation | 다양하게
     이벤트: start | chunk | complete | error
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -679,7 +698,7 @@ def generate_discovery_stream(idea: str) -> Iterator[str]:
         yield f"data: {json.dumps({'type': 'error', 'message': 'ANTHROPIC_API_KEY not set'})}\n\n"
         return
 
-    _log({"event": "discovery_start", "idea_len": len(idea)})
+    _log({"event": "discovery_start", "idea_len": len(idea), "lens": lens})
 
     try:
         skill = _load_skill("stock-discovery")
@@ -690,10 +709,14 @@ def generate_discovery_stream(idea: str) -> Iterator[str]:
     system_prompt = skill["instructions"]
     user_message = f"""다음 투자 아이디어를 바탕으로 미국과 한국 상장 종목 중 유망 후보를 발굴해 주세요.
 
+**탐색 렌즈**: {lens}
+
 **투자 아이디어**
 {idea.strip()}
 
-가치투자 원칙에 따라 5개 섹션을 XML 태그로 감싸서 출력해 주세요.
+5개 섹션을 XML 태그로 감싸서 출력해 주세요.
+모든 섹션을 반드시 완결해서 닫아 주세요.
+종목 탐색 보고서는 아이디어 발굴용이므로, 상세 종목 보고서처럼 과도하게 길게 쓰지 말고 핵심만 압축해 주세요.
 """
 
     yield f"data: {json.dumps({'type': 'start'})}\n\n"
@@ -704,7 +727,7 @@ def generate_discovery_stream(idea: str) -> Iterator[str]:
     try:
         with client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=16000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         ) as stream:

@@ -175,6 +175,7 @@ def run_break_monitor_job():
                     key_assumptions=ticker.thesis.key_assumptions or "",
                     news_context=news_context,
                     metrics_context=metrics_context,
+                    stock_type=ticker.thesis.stock_type or "",
                 )
                 notify_break_monitor(
                     ticker.symbol, ticker.name,
@@ -204,6 +205,10 @@ def run_light_refresh():
                 _refresh_light_cache(db, ticker.symbol, str(ticker.id), ticker.market.value, ticker.name)
                 if ticker.portfolio:
                     _refresh_portfolio_quote(db, ticker)
+                # US 종목 8-K 신규 공시 확인 (이미 요약된 건은 즉시 스킵)
+                if ticker.market.value == "US_Stock":
+                    from services.sec_pipeline import run_8k_pipeline
+                    run_8k_pipeline(ticker.symbol, str(ticker.id), db)
             except Exception:
                 logger.exception("Light refresh 실패: %s", ticker.symbol)
     finally:

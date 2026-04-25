@@ -10,6 +10,22 @@ logger = logging.getLogger(__name__)
 _kis = KISClient()
 
 
+def _get_portfolio_quote(symbol: str, market: MarketEnum) -> dict | None:
+    """표시용 현재가/일일 등락률은 KIS 평가손익률이 아니라 Yahoo quote를 사용."""
+    from services.market_data import get_yahoo_quote
+
+    symbols = [symbol]
+    if market == MarketEnum.KR_STOCK:
+        base = symbol.zfill(6)
+        symbols = [f"{base}.KS", f"{base}.KQ"]
+
+    for yf_symbol in symbols:
+        quote = get_yahoo_quote(yf_symbol)
+        if quote and quote.get("price"):
+            return quote
+    return None
+
+
 def sync_portfolio() -> dict:
     """전 계좌 잔고 조회 → 심볼별 집계 → Portfolio DB upsert.
     반환: {synced: int, accounts: int, errors: list, trades: list[dict]}
@@ -67,6 +83,10 @@ def sync_portfolio() -> dict:
                 qty = data["total_qty"]
                 avg_price = data["total_cost"] / qty if qty else 0
                 market = MarketEnum.KR_STOCK if data["currency"] == "KRW" else MarketEnum.US_STOCK
+                quote = _get_portfolio_quote(sym, market)
+                if quote:
+                    data["current_price"] = quote["price"]
+                    data["daily_pct"] = quote.get("change_pct") or 0
 
                 # Ticker 없으면 자동 생성
                 ticker = db.query(Ticker).filter(Ticker.symbol == sym).first()

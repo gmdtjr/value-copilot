@@ -29,6 +29,69 @@ type AnalyzeState = 'idle' | 'streaming' | 'done' | 'error'
 type RefineState = 'idle' | 'streaming' | 'done' | 'error'
 type ActiveTab = 'thesis' | 'data' | 'reports'
 
+const STOCK_TYPE_OPTIONS = [
+  {
+    value: 'compounding',
+    label: 'Compounding',
+    desc: '지속 복리 성장',
+    valuation: 'DCF / P/FCF',
+    signals: ['ROIC 15%+ 지속', 'FCF 전환율 높음', '경쟁 구조 안정적', '재투자 기회 남아 있음'],
+  },
+  {
+    value: 'growth',
+    label: 'Growth',
+    desc: '고성장 초기 기업',
+    valuation: 'EV/Revenue · Reverse DCF',
+    signals: ['매출 CAGR 20%+', 'TAM 대비 침투율 낮음', 'Gross Margin 개선 중', '흑자 전환 경로 보임'],
+  },
+  {
+    value: 'asset_play',
+    label: 'Asset Play',
+    desc: '저평가 자산',
+    valuation: 'NAV · P/B',
+    signals: ['P/B < 1 또는 시총 ≈ 보유 현금/자산', '자산 매각·재평가 촉매 존재', '시장이 자산 가치를 무시하는 상황'],
+  },
+  {
+    value: 'turnaround',
+    label: 'Turnaround',
+    desc: '회복 촉매',
+    valuation: '정상화 EV/EBITDA',
+    signals: ['최근 실적 부진, 구체적 촉매 존재', '신경영진·구조조정·사업 분리', 'Cash runway 확인 필요'],
+  },
+  {
+    value: 'cyclical',
+    label: 'Cyclical',
+    desc: '사이클 저점',
+    valuation: 'Mid-cycle EV/EBITDA',
+    signals: ['현재 이익이 역대 평균보다 낮음', '부채 수준 저점 생존 가능', '사이클 선행지표 바닥 근처'],
+  },
+  {
+    value: 'special_situation',
+    label: 'Special Situation',
+    desc: '이벤트 드리븐',
+    valuation: '이벤트 기대가치',
+    signals: ['M&A·스핀오프·구조조정 진행 중', '이벤트 완료 시 가치 실현 명확', '이벤트 무산 시 하방 제한'],
+  },
+] as const
+
+const STOCK_TYPE_LABEL: Record<string, string> = {
+  compounding: 'Compounding',
+  growth: 'Growth',
+  asset_play: 'Asset Play',
+  turnaround: 'Turnaround',
+  cyclical: 'Cyclical',
+  special_situation: 'Special Situation',
+}
+
+const SEED_MEMO_PLACEHOLDER: Record<string, string> = {
+  compounding: '이 종목을 Compounding으로 보는 이유를 작성하세요.\n\n예: 최근 5년간 ROIC가 꾸준히 18~22%를 유지하고 있고, 기업 고객의 계약 갱신율이 95% 이상이다. 경쟁사 대비 전환 비용이 높아서 한번 고객이 되면 떠나기 어려운 구조다...',
+  growth: '이 종목을 Growth로 보는 이유를 작성하세요.\n\n예: 현재 TAM 대비 침투율이 5% 수준이고, 분기 매출 성장률이 가속되고 있다. Gross Margin은 70%대이며 규모가 커질수록 마진이 개선되는 구조가 보인다...',
+  asset_play: '이 종목을 Asset Play로 보는 이유를 작성하세요.\n\n예: 현재 시가총액이 보유 부동산 장부가보다 낮다. 최대주주가 바뀌었고, 비핵심 자산 매각 의지를 최근 IR에서 밝혔다. 청산 시 주당 수령액이 현재가보다 높을 것으로 추정된다...',
+  turnaround: '이 종목을 Turnaround로 보는 이유를 작성하세요.\n\n예: 전임 CEO의 무분별한 M&A로 부채가 쌓였으나, 새 경영진이 자산 매각과 비용 절감을 선언했다. 현금 runway는 18개월이고, 핵심 사업 자체는 흑자다. 구조조정 완료 시 정상화 이익이 현재 EV 대비...',
+  cyclical: '이 종목을 Cyclical로 보는 이유를 작성하세요.\n\n예: 이 업종의 평균 마진은 역대 15%인데 현재 3%에 불과하다. 재고가 줄기 시작했고 설비투자는 2년째 감소 중이다. 부채/EBITDA가 2배 수준으로 사이클 저점을 버틸 수 있다. 정상화 시 이익은 현재의...',
+  special_situation: '이 종목을 Special Situation으로 보는 이유를 작성하세요.\n\n예: A사가 B사 인수를 발표했고 주당 X달러를 제시했다. 현재 주가는 Y달러로 Z% 스프레드가 있다. 규제 리스크가 낮고 양사 이사회가 모두 찬성했다. 완료 예상 시점은 N개월 후...',
+}
+
 // ── Ticker Reports Tab ────────────────────────────────────────────────────────
 
 type TickerReport = { id: string; type: string; content: string; created_at: string }
@@ -36,13 +99,13 @@ type TickerReport = { id: string; type: string; content: string; created_at: str
 const REPORT_SECTIONS: Record<string, { key: string; label: string }[]> = {
   analysis: [
     { key: 'business_overview', label: '1. 기업 개요' },
-    { key: 'moat_analysis', label: '2. 경쟁우위 (Moat)' },
+    { key: 'competitive_position', label: '2. 경쟁 구도' },
     { key: 'financial_analysis', label: '3. 재무 심층 분석' },
-    { key: 'management_quality', label: '4. 경영진 & 자본배분' },
+    { key: 'management_track_record', label: '4. 경영진 의사결정 이력' },
     { key: 'valuation', label: '5. 밸류에이션' },
     { key: 'risk_matrix', label: '6. 리스크 매트릭스' },
     { key: 'recent_developments', label: '7. 최근 동향' },
-    { key: 'investment_conclusion', label: '8. 투자 결론' },
+    { key: 'bull_bear_synthesis', label: '8. 강세/약세 종합' },
   ],
 }
 
@@ -54,7 +117,7 @@ function extractSection(content: string, key: string) {
 function ReportAccordion({ report }: { report: TickerReport }) {
   const sections = REPORT_SECTIONS[report.type]
   const hasSections = sections?.some(({ key }) => extractSection(report.content, key))
-  const [open, setOpen] = useState<Set<string>>(new Set(['business_overview', 'investment_conclusion']))
+  const [open, setOpen] = useState<Set<string>>(new Set(['business_overview', 'bull_bear_synthesis']))
 
   if (!sections || !hasSections) {
     return <Markdown content={report.content} />
@@ -395,6 +458,9 @@ export default function ThesisPage() {
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>('idle')
   const [analyzeError, setAnalyzeError] = useState('')
   const [streamText, setStreamText] = useState('')
+  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false)
+  const [modalStockType, setModalStockType] = useState('compounding')
+  const [modalSeedMemo, setModalSeedMemo] = useState('')
   const [openSections, setOpenSections] = useState<Set<ThesisSectionKey>>(new Set(['thesis']))
   const [reporting, setReporting] = useState(false)
   const [reportMsg, setReportMsg] = useState('')
@@ -460,34 +526,45 @@ export default function ThesisPage() {
     }
   }
 
+  function openAnalyzeModal() {
+    setModalStockType(thesis?.stock_type ?? 'compounding')
+    setModalSeedMemo('')
+    setShowAnalyzeModal(true)
+  }
+
   function startAnalyze() {
     if (!id) return
+    setShowAnalyzeModal(false)
     setAnalyzeState('streaming')
     setStreamText('')
     setAnalyzeError('')
     setActiveTab('thesis')
 
-    abortRef.current = api.analyzeStream(id, {
-      onStart: () => setStreamText(''),
-      onChunk: (text) => setStreamText((prev) => prev + text),
-      onComplete: async (sections) => {
-        try {
-          const updated = await api.getThesis(id)
-          setThesis(updated)
-          setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
-        } catch {
-          setThesis((prev) => prev
-            ? { ...prev, ...sections, confirmed: 'draft' }
-            : null)
-        }
-        setAnalyzeState('done')
-        setStreamText('')
+    abortRef.current = api.analyzeStream(
+      id,
+      { stock_type: modalStockType, seed_memo: modalSeedMemo },
+      {
+        onStart: () => setStreamText(''),
+        onChunk: (text) => setStreamText((prev) => prev + text),
+        onComplete: async (sections) => {
+          try {
+            const updated = await api.getThesis(id)
+            setThesis(updated)
+            setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
+          } catch {
+            setThesis((prev) => prev
+              ? { ...prev, ...sections, confirmed: 'draft' }
+              : null)
+          }
+          setAnalyzeState('done')
+          setStreamText('')
+        },
+        onError: (msg) => {
+          setAnalyzeError(msg)
+          setAnalyzeState('error')
+        },
       },
-      onError: (msg) => {
-        setAnalyzeError(msg)
-        setAnalyzeState('error')
-      },
-    })
+    )
   }
 
   function startRefine() {
@@ -610,17 +687,20 @@ export default function ThesisPage() {
             </button>
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-white text-lg sm:text-xl font-bold">{ticker.symbol}</span>
-                <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">
-                  {ticker.market === 'US_Stock' ? 'US' : 'KR'}
-                </span>
+                <span className="text-white text-lg sm:text-xl font-bold">{ticker.name}</span>
                 {thesis && (
                   <span className={`text-xs sm:text-sm font-medium ${statusColor[thesis.confirmed]}`}>
                     {statusLabel[thesis.confirmed]}
                   </span>
                 )}
               </div>
-              <p className="text-xs sm:text-sm text-gray-400 truncate max-w-[160px] sm:max-w-none">{ticker.name}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-xs text-gray-500 font-mono">{ticker.symbol}</span>
+                <span className="text-xs text-gray-600">·</span>
+                <span className="text-xs text-gray-500">
+                  {ticker.market === 'US_Stock' ? 'US' : 'KR'}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -679,7 +759,7 @@ export default function ThesisPage() {
               }
             </button>
             <button
-              onClick={startAnalyze}
+              onClick={openAnalyzeModal}
               disabled={analyzeState === 'streaming'}
               className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
             >
@@ -788,6 +868,24 @@ export default function ThesisPage() {
               </div>
             )}
 
+            {/* stock_type 배지 + seed_memo */}
+            {hasContent && thesis?.stock_type && (
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-gray-500">투자 유형</span>
+                  <span className="px-2.5 py-1 bg-violet-900/50 border border-violet-700 text-violet-300 text-xs font-medium rounded-full">
+                    {STOCK_TYPE_LABEL[thesis.stock_type] ?? thesis.stock_type}
+                  </span>
+                </div>
+                {thesis.seed_memo && (
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">나의 초기 관점</p>
+                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{thesis.seed_memo}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Thesis sections */}
             {hasContent && THESIS_SECTIONS.map(({ key, label }) => {
               const content = thesis?.[key as keyof Thesis] as string | null | undefined
@@ -868,6 +966,96 @@ export default function ThesisPage() {
           <TickerReportsTab tickerId={id} />
         )}
       </main>
+
+      {/* AI 분석 모달 */}
+      {showAnalyzeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div>
+              <h2 className="text-white font-semibold text-lg flex items-center gap-2">
+                <Sparkles size={18} className="text-violet-400" /> AI 분석 — 관점 설정
+              </h2>
+              <p className="text-gray-400 text-sm mt-1">
+                나의 관점을 먼저 설정하면 AI가 그 방향으로 thesis 초안을 작성합니다.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm text-gray-300 font-medium">투자 유형 (Stock Type)</label>
+              <p className="text-xs text-gray-500">보고서에서 본 패턴과 맞는 유형을 고르세요.</p>
+              <div className="grid grid-cols-1 gap-1.5 max-h-72 overflow-y-auto pr-1">
+                {STOCK_TYPE_OPTIONS.map((opt) => {
+                  const selected = modalStockType === opt.value
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => setModalStockType(opt.value)}
+                      className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                        selected
+                          ? 'bg-violet-900/40 border-violet-600'
+                          : 'bg-gray-800 border-gray-700 hover:border-gray-500'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`font-semibold text-sm ${selected ? 'text-violet-200' : 'text-white'}`}>
+                            {opt.label}
+                          </span>
+                          <span className="text-xs text-gray-500">{opt.desc}</span>
+                        </div>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          selected ? 'bg-violet-800 text-violet-300' : 'bg-gray-700 text-gray-400'
+                        }`}>
+                          {opt.valuation}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {opt.signals.map((s) => (
+                          <span key={s} className={`text-xs px-1.5 py-0.5 rounded ${
+                            selected ? 'bg-violet-900/60 text-violet-300' : 'bg-gray-700/60 text-gray-400'
+                          }`}>
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm text-gray-300 font-medium">
+                나의 초기 관점 <span className="text-red-400">*</span>
+              </label>
+              <textarea
+                value={modalSeedMemo}
+                onChange={(e) => setModalSeedMemo(e.target.value)}
+                placeholder={SEED_MEMO_PLACEHOLDER[modalStockType] ?? `이 종목을 ${STOCK_TYPE_LABEL[modalStockType]} 관점으로 보는 이유를 작성하세요.`}
+                rows={5}
+                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
+              />
+              <p className="text-xs text-gray-500">AI는 이 관점을 기반으로 thesis를 작성합니다. 구체적일수록 결과물이 좋아집니다.</p>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-1">
+              <button
+                onClick={() => setShowAnalyzeModal(false)}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={startAnalyze}
+                disabled={!modalSeedMemo.trim()}
+                className="flex items-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+              >
+                <Sparkles size={14} /> 분석 시작
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

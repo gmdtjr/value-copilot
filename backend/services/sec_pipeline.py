@@ -1,6 +1,7 @@
 """
 SEC EDGAR filing summarization pipeline.
 Flow: filing_refs → EDGAR index → main doc HTML → section extraction → Claude summary → SecFilingSummary DB
+8-K: EDGAR submissions API → primary doc + EX-99.1 → Claude Haiku summary → SecFilingSummary DB
 """
 import logging
 import re
@@ -16,6 +17,12 @@ _HEADERS = {
     "User-Agent": "value-copilot research@example.com",
     "Accept-Encoding": "gzip, deflate",
 }
+
+# 8-K에서 의미 있는 items (실적/임원/계약/가이던스/주요이벤트)
+_TARGET_8K_ITEMS = {"2.02", "5.02", "1.01", "7.01", "8.01"}
+
+# CIK 조회 캐시 (프로세스 수명 동안 유지 — workers=1이므로 안전)
+_cik_cache: dict[str, str] = {}
 
 _SECTION_PATTERNS = {
     "business": [
@@ -233,23 +240,295 @@ def run_sec_pipeline(filing_refs: list[dict], ticker_id: str, db) -> int:
     return saved
 
 
-def get_sec_context(ticker_id: str, db, limit: int = 2) -> str:
+def _get_edgar_cik(ticker: str) -> str | None:
+    """EDGAR company_tickers.json에서 ticker → CIK 조회. 프로세스 캐시 사용."""
+    upper = ticker.upper()
+    if upper in _cik_cache:
+        return _cik_cache[upper]
+    try:
+        r = requests.get(
+            "https://www.sec.gov/files/company_tickers.json",
+            headers=_HEADERS, timeout=10,
+        )
+        if r.status_code != 200:
+            return None
+        for entry in r.json().values():
+            sym = entry.get("ticker", "").upper()
+            cik = str(entry["cik_str"]).zfill(10)
+            _cik_cache[sym] = cik  # 전체 결과를 한 번에 캐시
+        return _cik_cache.get(upper)
+    except Exception as e:
+        logger.warning("CIK lookup failed for %s: %s", ticker, e)
+    return None
+
+
+def _get_edgar_8k_refs(ticker: str) -> list[dict]:
     """
-    Retrieve SEC summaries from DB and format as context string for report prompt.
+    EDGAR submissions API로 최근 관련 8-K 목록 반환 (최대 5건).
+    대상 items: 2.02(실적), 5.02(임원변경), 1.01(주요계약), 7.01(가이던스), 8.01(주요이벤트)
+    """
+    cik = _get_edgar_cik(ticker)
+    if not cik:
+        return []
+    try:
+        r = requests.get(
+            f"https://data.sec.gov/submissions/CIK{cik}.json",
+            headers=_HEADERS, timeout=10,
+        )
+        if r.status_code != 200:
+            return []
+        recent = r.json().get("filings", {}).get("recent", {})
+        forms        = recent.get("form", [])
+        accessions   = recent.get("accessionNumber", [])
+        filed_dates  = recent.get("filingDate", [])
+        items_list   = recent.get("items", [])
+        primary_docs = recent.get("primaryDocument", [])
+
+        cik_int = int(cik)
+        refs = []
+        for i, form in enumerate(forms):
+            if form != "8-K":
+                continue
+            items_str = items_list[i] if i < len(items_list) else ""
+            item_set = {it.strip() for it in items_str.split(",")}
+            if not (item_set & _TARGET_8K_ITEMS):
+                continue
+
+            acc = accessions[i]
+            acc_clean = acc.replace("-", "")
+            date = filed_dates[i] if i < len(filed_dates) else ""
+            primary_doc = primary_docs[i] if i < len(primary_docs) else ""
+
+            if primary_doc and primary_doc.endswith(('.htm', '.html')):
+                doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_clean}/{primary_doc}"
+            else:
+                doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_clean}/"
+
+            refs.append({
+                "period":    date,
+                "url":       doc_url,
+                "items":     items_str,
+                "cik":       str(cik_int),
+                "acc_nodash": acc_clean,
+            })
+            if len(refs) >= 5:
+                break
+
+        logger.info("8-K refs for %s: %d relevant found", ticker, len(refs))
+        return refs
+    except Exception as e:
+        logger.warning("8-K refs failed for %s: %s", ticker, e)
+        return []
+
+
+def _fetch_8k_content(ref: dict) -> tuple[str, str]:
+    """
+    8-K index JSON → 주 문서 텍스트 + EX-99.1 텍스트 반환.
+    EX-99.1는 실적 발표 press release를 포함하는 경우가 많음.
+    Returns (main_text, ex991_text)
+    """
+    cik = ref.get("cik", "")
+    acc_nodash = ref.get("acc_nodash", "")
+    main_text = ex991_text = ""
+
+    if cik and acc_nodash and len(acc_nodash) == 18:
+        try:
+            acc_dashed = f"{acc_nodash[:10]}-{acc_nodash[10:12]}-{acc_nodash[12:]}"
+            base = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/"
+            r = requests.get(f"{base}{acc_dashed}-index.json", headers=_HEADERS, timeout=10)
+            if r.status_code == 200:
+                docs = r.json().get("documents", [])
+                main_url = ex991_url = None
+                for doc in docs:
+                    dtype = (doc.get("type") or "").upper().replace(" ", "")
+                    name = doc.get("filename", "")
+                    if not name:
+                        continue
+                    url = f"{base}{name}"
+                    if dtype == "8-K" and not main_url and name.endswith(('.htm', '.html')):
+                        main_url = url
+                    elif dtype in ("EX-99.1", "EX-99") and not ex991_url and name.endswith(('.htm', '.html', '.txt')):
+                        ex991_url = url
+
+                if main_url:
+                    html = _fetch_text(main_url)
+                    main_text = _strip_html(html)[:3000] if html else ""
+                if ex991_url:
+                    time.sleep(0.5)
+                    html = _fetch_text(ex991_url)
+                    ex991_text = _strip_html(html)[:5000] if html else ""
+                return main_text, ex991_text
+        except Exception as e:
+            logger.warning("8-K index JSON failed: %s", e)
+
+    # Fallback: primaryDocument URL 직접 사용
+    url = ref.get("url", "")
+    if url.endswith(('.htm', '.html')):
+        html = _fetch_text(url)
+        main_text = _strip_html(html)[:4000] if html else ""
+    return main_text, ex991_text
+
+
+def _summarize_8k(client: anthropic.Anthropic, text: str, items: str) -> str:
+    if not text.strip():
+        return ""
+
+    if "2.02" in items:
+        instruction = (
+            "This is an earnings release (Item 2.02 - Results of Operations). "
+            "Summarize: (1) key financial results with specific numbers (revenue, EPS, key metrics vs prior period), "
+            "(2) management guidance/outlook, (3) notable business developments. Max 350 words."
+        )
+    elif "5.02" in items:
+        instruction = (
+            "This involves executive/director changes (Item 5.02). "
+            "Summarize: who is departing or joining, their role, stated reasons, and potential implications. Max 200 words."
+        )
+    elif "1.01" in items:
+        instruction = (
+            "This involves a material agreement (Item 1.01). "
+            "Summarize: nature of the agreement, counterparties, key terms, financial impact if stated, strategic significance. Max 250 words."
+        )
+    elif "7.01" in items:
+        instruction = (
+            "This is a Regulation FD disclosure (Item 7.01). "
+            "Summarize the key guidance, business update, or investor communication. Max 250 words."
+        )
+    else:
+        instruction = (
+            f"This 8-K covers item(s): {items}. "
+            "Summarize the key business event and its significance for investors. Max 250 words."
+        )
+
+    try:
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": f"{instruction}\n\n---\n{text[:6000]}"}],
+        )
+        return msg.content[0].text.strip()
+    except Exception as e:
+        logger.warning("8-K summarize failed (items=%s): %s", items, e)
+        return ""
+
+
+def run_8k_pipeline(ticker: str, ticker_id: str, db) -> int:
+    """
+    최근 관련 8-K 공시를 가져와 요약 후 SecFilingSummary에 저장. US 종목 전용.
+    반환: 새로 저장된 건수.
     """
     from models.db import SecFilingSummary
-    rows = (
+    import os
+
+    refs = _get_edgar_8k_refs(ticker)
+    if not refs:
+        return 0
+
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    saved = 0
+
+    for ref in refs:
+        period = ref["period"]   # "2025-01-15"
+        items  = ref["items"]    # "2.02,9.01"
+        if not period:
+            continue
+
+        existing = (
+            db.query(SecFilingSummary)
+            .filter(
+                SecFilingSummary.ticker_id == ticker_id,
+                SecFilingSummary.report_period == period,
+                SecFilingSummary.filing_type == "8-K",
+            )
+            .first()
+        )
+        if existing:
+            continue
+
+        logger.info("Processing 8-K: %s %s (items: %s)", ticker, period, items)
+        time.sleep(1)
+
+        main_text, ex991_text = _fetch_8k_content(ref)
+        combined = f"[8-K Form]\n{main_text}\n\n[Exhibit 99.1]\n{ex991_text}".strip()
+        if not main_text and not ex991_text:
+            logger.warning("8-K content empty: %s %s", ticker, period)
+            continue
+
+        summary = _summarize_8k(client, combined, items)
+        if not summary:
+            continue
+
+        # 이벤트 유형 레이블 (business_summary에 저장 → context 포맷용)
+        labels = []
+        if "2.02" in items: labels.append("실적 발표")
+        if "5.02" in items: labels.append("임원 변경")
+        if "1.01" in items: labels.append("주요 계약")
+        if "7.01" in items: labels.append("가이던스")
+        if "8.01" in items: labels.append("주요 이벤트")
+        event_type = ", ".join(labels) if labels else f"Items {items}"
+
+        row = SecFilingSummary(
+            ticker_id=ticker_id,
+            filing_type="8-K",
+            report_period=period,
+            filing_url=ref["url"],
+            business_summary=event_type,
+            mda_summary=summary,
+        )
+        db.add(row)
+        db.commit()
+        saved += 1
+        logger.info("Saved 8-K summary: %s %s (%s)", ticker, period, event_type)
+        time.sleep(1.5)
+
+    return saved
+
+
+def get_sec_context(ticker_id: str, db, limit: int = 2) -> str:
+    """
+    DB에서 SEC 공시 요약을 조회하여 report 프롬프트용 문자열로 반환.
+    8-K(최근 3건)를 먼저, 그 뒤 10-K/10-Q(최근 limit건) 순서.
+    """
+    from models.db import SecFilingSummary
+
+    eight_k = (
         db.query(SecFilingSummary)
-        .filter(SecFilingSummary.ticker_id == ticker_id)
+        .filter(
+            SecFilingSummary.ticker_id == ticker_id,
+            SecFilingSummary.filing_type == "8-K",
+        )
+        .order_by(SecFilingSummary.report_period.desc())
+        .limit(3)
+        .all()
+    )
+
+    annual_quarterly = (
+        db.query(SecFilingSummary)
+        .filter(
+            SecFilingSummary.ticker_id == ticker_id,
+            SecFilingSummary.filing_type.in_(["10-K", "10-Q"]),
+        )
         .order_by(SecFilingSummary.report_period.desc())
         .limit(limit)
         .all()
     )
-    if not rows:
+
+    if not eight_k and not annual_quarterly:
         return ""
 
     parts = []
-    for row in rows:
+
+    for row in eight_k:
+        event_type = row.business_summary or ""
+        header = f"=== 8-K {row.report_period}"
+        if event_type:
+            header += f" [{event_type}]"
+        header += " ==="
+        parts.append(header)
+        if row.mda_summary:
+            parts.append(f"[Event Summary]\n{row.mda_summary}")
+
+    for row in annual_quarterly:
         parts.append(f"=== {row.filing_type} {row.report_period} ===")
         if row.business_summary:
             parts.append(f"[Business Overview]\n{row.business_summary}")

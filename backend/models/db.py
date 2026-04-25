@@ -20,6 +20,27 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
+    return [member.value for member in enum_cls]
+
+
+def _pg_enum(enum_cls: type[enum.Enum], *, name: str | None = None) -> SAEnum:
+    return SAEnum(
+        enum_cls,
+        name=name,
+        values_callable=_enum_values,
+    )
+
+
+def _string_enum(enum_cls: type[enum.Enum], *, name: str | None = None) -> SAEnum:
+    return SAEnum(
+        enum_cls,
+        name=name,
+        values_callable=_enum_values,
+        native_enum=False,
+    )
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -50,6 +71,14 @@ class ReportTypeEnum(str, enum.Enum):
     DISCOVERY = "discovery"
     PORTFOLIO_REVIEW = "portfolio_review"
 
+class StockTypeEnum(str, enum.Enum):
+    COMPOUNDING = "compounding"
+    GROWTH = "growth"
+    ASSET_PLAY = "asset_play"
+    TURNAROUND = "turnaround"
+    CYCLICAL = "cyclical"
+    SPECIAL_SITUATION = "special_situation"
+
 class TradeActionEnum(str, enum.Enum):
     BUY = "buy"        # 신규 매수
     SELL = "sell"      # 전량 매도
@@ -65,8 +94,8 @@ class Ticker(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     symbol = Column(String(20), unique=True, nullable=False, index=True)
     name = Column(String(200), nullable=False)
-    market = Column(SAEnum(MarketEnum), nullable=False)
-    status = Column(SAEnum(TickerStatusEnum), default=TickerStatusEnum.WATCHLIST)
+    market = Column(SAEnum(MarketEnum, name="marketenum"), nullable=False)
+    status = Column(SAEnum(TickerStatusEnum, name="tickerstatusenum"), default=TickerStatusEnum.WATCHLIST)
     daily_alert = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -81,13 +110,15 @@ class Thesis(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id"), unique=True, nullable=False)
-    confirmed = Column(SAEnum(ThesisStatusEnum), default=ThesisStatusEnum.DRAFT, nullable=False)
+    confirmed = Column(SAEnum(ThesisStatusEnum, name="thesisstatusenum"), default=ThesisStatusEnum.DRAFT, nullable=False)
     confirmed_at = Column(DateTime, nullable=True)
     thesis = Column(Text, nullable=True)
     risk = Column(Text, nullable=True)
     key_assumptions = Column(Text, nullable=True)
     valuation = Column(Text, nullable=True)
     last_analyzed_at = Column(DateTime, nullable=True)
+    stock_type = Column(_string_enum(StockTypeEnum, name="stocktypeenum"), nullable=True)
+    seed_memo = Column(Text, nullable=True)
 
     ticker = relationship("Ticker", back_populates="thesis")
 
@@ -97,7 +128,7 @@ class Report(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id"), nullable=True)
-    type = Column(SAEnum(ReportTypeEnum), nullable=False)
+    type = Column(_pg_enum(ReportTypeEnum, name="reporttypeenum"), nullable=False)
     content = Column(Text, nullable=False)
     is_read = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -178,7 +209,7 @@ class TradeLog(Base):
     ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id", ondelete="SET NULL"), nullable=True)
     symbol = Column(String(20), nullable=False)
     name = Column(String(200), nullable=False)
-    action = Column(SAEnum(TradeActionEnum), nullable=False)
+    action = Column(SAEnum(TradeActionEnum, name="tradeactionenum"), nullable=False)
     quantity_before = Column(Float, nullable=False, default=0)
     quantity_after = Column(Float, nullable=False, default=0)
     avg_price_before = Column(Float, nullable=False, default=0)

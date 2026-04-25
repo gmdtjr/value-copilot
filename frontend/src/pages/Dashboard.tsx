@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Sparkles, Settings, BookOpen } from 'lucide-react'
+import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Settings, BookOpen, ExternalLink } from 'lucide-react'
 import { api } from '../api'
 import type { Ticker, Market } from '../types'
 
@@ -50,7 +50,7 @@ const WATCHLIST_STATUS_ORDER: Record<string, number> = {
   needs_review: 2,
 }
 
-type BulkAction = 'refresh' | 'analyze' | 'report'
+type BulkAction = 'refresh' | 'report' | 'valley'
 type JobStatus = 'waiting' | 'running' | 'done' | 'error'
 
 interface JobState {
@@ -202,8 +202,8 @@ export default function Dashboard() {
 
     const endpoints: Record<BulkAction, string> = {
       refresh: '/api/tickers/bulk-refresh',
-      analyze: '/api/tickers/bulk-analyze',
       report:  '/api/tickers/bulk-report',
+      valley:  '/api/tickers/bulk-resolve-valley',
     }
     const res = await fetch(endpoints[action], {
       method: 'POST',
@@ -284,8 +284,8 @@ export default function Dashboard() {
   }
   const ACTION_LABEL: Record<BulkAction, string> = {
     refresh: '데이터 수집',
-    analyze: 'Thesis 생성',
     report: '리포트 생성',
+    valley: 'Valley 링크 찾기',
   }
 
   const jobTickerIds = Object.keys(jobStatuses)
@@ -382,20 +382,20 @@ export default function Dashboard() {
                 데이터 수집
               </button>
               <button
-                onClick={() => runBulkAction('analyze')}
-                disabled={bulkRunning || bulkInProgress}
-                className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
-              >
-                <Sparkles size={13} />
-                Thesis 생성
-              </button>
-              <button
                 onClick={() => runBulkAction('report')}
                 disabled={bulkRunning || bulkInProgress}
                 className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
                 <TrendingUp size={13} />
                 리포트 생성
+              </button>
+              <button
+                onClick={() => runBulkAction('valley')}
+                disabled={bulkRunning || bulkInProgress}
+                className="flex items-center gap-1.5 bg-sky-700 hover:bg-sky-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+              >
+                <ExternalLink size={13} />
+                Valley 링크 찾기
               </button>
               <button
                 onClick={() => setSelectedIds(new Set())}
@@ -791,7 +791,7 @@ export default function Dashboard() {
 
           function TickerCard({ ticker }: { ticker: typeof tickers[0] }) {
             const p = ticker.status === 'portfolio' && ticker.portfolio_current_price != null
-            const dailyPct = ticker.portfolio_daily_pct ?? 0
+            const dailyPct = ticker.portfolio_daily_pct
             const pnlPct = ticker.portfolio_pnl_pct ?? 0
             const isSelected = selectedIds.has(ticker.id)
             return (
@@ -816,22 +816,23 @@ export default function Dashboard() {
                     )}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-white font-semibold text-lg">{ticker.symbol}</span>
-                        <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">
-                          {ticker.market === 'US_Stock' ? 'US' : 'KR'}
-                        </span>
+                        <span className="text-white font-semibold truncate">{ticker.name}</span>
                         {p && ticker.portfolio_current_price != null && (
                           <span className="text-sm font-medium text-white">
                             {ticker.portfolio_current_price.toLocaleString()}
                           </span>
                         )}
-                        {p && (
+                        {p && dailyPct != null && (
                           <span className={`text-xs font-medium ${dailyPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                             {dailyPct >= 0 ? '+' : ''}{dailyPct.toFixed(2)}%
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-400 mt-0.5 truncate">{ticker.name}</p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-xs text-gray-500 font-mono">{ticker.symbol}</span>
+                        <span className="text-xs text-gray-600">·</span>
+                        <span className="text-xs text-gray-500">{ticker.market === 'US_Stock' ? 'US' : 'KR'}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -868,13 +869,36 @@ export default function Dashboard() {
                       </button>
                     )}
                     {!selectMode && (
-                      <button
-                        onClick={() => navigate(`/tickers/${ticker.id}/thesis`)}
-                        className="flex items-center gap-1.5 text-sm text-emerald-400 hover:text-emerald-300 transition-colors"
-                      >
-                        <Eye size={15} />
-                        Thesis
-                      </button>
+                      <>
+                        {ticker.valley_url ? (
+                          <a
+                            href={ticker.valley_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                            title="Valley AI에서 보기"
+                          >
+                            <ExternalLink size={15} />
+                            Valley
+                          </a>
+                        ) : (
+                          <span
+                            className="flex items-center gap-1.5 text-sm text-amber-500 cursor-default"
+                            title="Valley 종목 조회 실패"
+                          >
+                            <ExternalLink size={15} />
+                            Valley
+                          </span>
+                        )}
+                        <button
+                          onClick={() => navigate(`/tickers/${ticker.id}/thesis`)}
+                          className="flex items-center gap-1.5 text-sm text-emerald-400 hover:text-emerald-300 transition-colors"
+                        >
+                          <Eye size={15} />
+                          Thesis
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

@@ -137,6 +137,7 @@ export const api = {
    */
   analyzeStream(
     tickerId: string,
+    body: { stock_type: string; seed_memo: string },
     callbacks: {
       onStart?: (symbol: string) => void
       onChunk: (text: string) => void
@@ -148,6 +149,8 @@ export const api = {
 
     fetch(`${BASE}/tickers/${tickerId}/analyze`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
       signal: controller.signal,
     })
       .then(async (res) => {

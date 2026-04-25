@@ -154,7 +154,8 @@ class KISClient:
                         "quantity": qty,
                         "avg_price": round(float(item.get("pchs_avg_pric", "0"))),
                         "current_price": int(float(item.get("prpr", "0"))),
-                        "daily_pct": round(float(item.get("evlu_pfls_rt", "0")), 2),
+                        "daily_pct": 0.0,
+                        "kis_pnl_pct": round(float(item.get("evlu_pfls_rt", "0")), 2),
                         "currency": "KRW",
                         "account": account.name,
                     })
@@ -225,7 +226,8 @@ class KISClient:
                             "quantity": qty,
                             "avg_price": round(float(item.get("pchs_avg_pric", "0")), 2),
                             "current_price": round(float(item.get("now_pric2", "0")), 2),
-                            "daily_pct": round(float(item.get("evlu_pfls_rt", "0")), 2),
+                            "daily_pct": 0.0,
+                            "kis_pnl_pct": round(float(item.get("evlu_pfls_rt", "0")), 2),
                             "currency": "USD",
                             "account": account.name,
                         })

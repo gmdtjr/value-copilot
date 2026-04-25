@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff } from 'lucide-react'
+import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff, Plus, CheckCircle } from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
 import type { ReportComment } from '../types'
@@ -9,11 +9,25 @@ interface Report {
   id: string
   ticker_id: string | null
   ticker_symbol: string | null
+  ticker_name: string | null
   type: string
   content: string
   created_at: string
   is_read: boolean
   comment_count: number
+}
+
+function parseSseEvents(chunk: string): Array<Record<string, unknown>> {
+  return chunk
+    .split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line.slice(6))]
+      } catch {
+        return []
+      }
+    })
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -53,13 +67,13 @@ const DISCOVERY_SECTIONS = [
 // 심층 분석 보고서의 8섹션
 const DEEP_SECTIONS = [
   { key: 'business_overview', label: '1. 기업 개요' },
-  { key: 'moat_analysis', label: '2. 경쟁우위 (Moat)' },
+  { key: 'competitive_position', label: '2. 경쟁 구도' },
   { key: 'financial_analysis', label: '3. 재무 심층 분석' },
-  { key: 'management_quality', label: '4. 경영진 & 자본배분' },
+  { key: 'management_track_record', label: '4. 경영진 의사결정 이력' },
   { key: 'valuation', label: '5. 밸류에이션' },
   { key: 'risk_matrix', label: '6. 리스크 매트릭스' },
   { key: 'recent_developments', label: '7. 최근 동향' },
-  { key: 'investment_conclusion', label: '8. 투자 결론' },
+  { key: 'bull_bear_synthesis', label: '8. 강세/약세 종합' },
 ]
 
 function extractSection(content: string, sectionName: string): string {
@@ -68,9 +82,36 @@ function extractSection(content: string, sectionName: string): string {
   return match ? match[1].trim() : ''
 }
 
+type AddState = 'idle' | 'loading' | 'added' | 'exists'
+
+interface ExtractedTicker {
+  symbol: string
+  name: string
+  market: 'US_Stock' | 'KR_Stock'
+}
+
+function extractDiscoveryTickers(content: string): ExtractedTicker[] {
+  const RE = /\*\*\[([A-Z0-9]+)\]\s+([^\*\n]+?)\*\*/g
+  const result: ExtractedTicker[] = []
+  const seen = new Set<string>()
+  for (const [section, market] of [['us_picks', 'US_Stock'], ['kr_picks', 'KR_Stock']] as const) {
+    const text = extractSection(content, section)
+    RE.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = RE.exec(text)) !== null) {
+      const symbol = m[1].trim()
+      if (!seen.has(symbol)) {
+        seen.add(symbol)
+        result.push({ symbol, name: m[2].trim(), market })
+      }
+    }
+  }
+  return result
+}
+
 function DeepReportView({ report }: { report: Report }) {
   const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['business_overview', 'investment_conclusion'])
+    new Set(['business_overview', 'bull_bear_synthesis'])
   )
 
   function toggle(key: string) {
@@ -173,6 +214,11 @@ function DiscoveryReportView({ report }: { report: Report }) {
   const [openSections, setOpenSections] = useState<Set<string>>(
     new Set(['theme_analysis', 'us_picks', 'kr_picks'])
   )
+  const [addStates, setAddStates] = useState<Record<string, AddState>>({})
+
+  useEffect(() => { setAddStates({}) }, [report.id])
+
+  const extractedTickers = useMemo(() => extractDiscoveryTickers(report.content), [report.content])
 
   function toggle(key: string) {
     setOpenSections((prev) => {
@@ -183,6 +229,22 @@ function DiscoveryReportView({ report }: { report: Report }) {
     })
   }
 
+  async function addToWatchlist(ticker: ExtractedTicker) {
+    const cur = addStates[ticker.symbol] ?? 'idle'
+    if (cur === 'loading' || cur === 'added' || cur === 'exists') return
+    setAddStates(prev => ({ ...prev, [ticker.symbol]: 'loading' }))
+    try {
+      const res = await fetch('/api/tickers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: ticker.symbol, name: ticker.name, market: ticker.market, status: 'watchlist' }),
+      })
+      setAddStates(prev => ({ ...prev, [ticker.symbol]: res.status === 201 ? 'added' : 'exists' }))
+    } catch {
+      setAddStates(prev => ({ ...prev, [ticker.symbol]: 'idle' }))
+    }
+  }
+
   const hasSections = DISCOVERY_SECTIONS.some(({ key }) => extractSection(report.content, key))
 
   if (!hasSections) {
@@ -190,31 +252,74 @@ function DiscoveryReportView({ report }: { report: Report }) {
   }
 
   return (
-    <div className="space-y-2">
-      {DISCOVERY_SECTIONS.map(({ key, label }) => {
-        const text = extractSection(report.content, key)
-        if (!text) return null
-        const isOpen = openSections.has(key)
-        return (
-          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
-            <button
-              onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
-            >
-              <span className="text-white text-sm font-medium">{label}</span>
-              {isOpen
-                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
-              }
-            </button>
-            {isOpen && (
-              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
-                <Markdown content={text} />
-              </div>
-            )}
+    <div className="space-y-3">
+      {extractedTickers.length > 0 && (
+        <div className="bg-gray-800/40 border border-gray-700 rounded-lg px-4 py-3 space-y-2.5">
+          <p className="text-xs text-gray-400 font-medium">추천 종목 — 관심 목록 추가</p>
+          <div className="flex flex-wrap gap-2">
+            {extractedTickers.map(t => {
+              const state = addStates[t.symbol] ?? 'idle'
+              const done = state === 'added' || state === 'exists'
+              const isKr = t.market === 'KR_Stock'
+              return (
+                <button
+                  key={t.symbol}
+                  onClick={() => addToWatchlist(t)}
+                  disabled={done || state === 'loading'}
+                  title={done ? (state === 'added' ? '관심 목록에 추가됨' : '이미 추가된 종목') : t.name}
+                  className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    done
+                      ? 'border-emerald-700 bg-emerald-900/30 text-emerald-400 cursor-default'
+                      : state === 'loading'
+                      ? 'border-gray-600 bg-gray-800 text-gray-500 cursor-wait'
+                      : 'border-gray-600 bg-gray-800 text-gray-300 hover:border-emerald-600 hover:text-white'
+                  }`}
+                >
+                  <span className={`font-medium px-1 py-0.5 rounded text-xs ${isKr ? 'bg-blue-900/60 text-blue-300' : 'bg-violet-900/60 text-violet-300'}`}>
+                    {isKr ? 'KR' : 'US'}
+                  </span>
+                  <span className="font-semibold">{t.symbol}</span>
+                  {state === 'loading'
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : done
+                    ? <CheckCircle size={11} />
+                    : <Plus size={11} />
+                  }
+                </button>
+              )
+            })}
           </div>
-        )
-      })}
+          {Object.values(addStates).some(s => s === 'exists') && (
+            <p className="text-xs text-gray-500">초록 체크 = 이미 관심/포트폴리오에 있는 종목</p>
+          )}
+        </div>
+      )}
+      <div className="space-y-2">
+        {DISCOVERY_SECTIONS.map(({ key, label }) => {
+          const text = extractSection(report.content, key)
+          if (!text) return null
+          const isOpen = openSections.has(key)
+          return (
+            <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+              <button
+                onClick={() => toggle(key)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+              >
+                <span className="text-white text-sm font-medium">{label}</span>
+                {isOpen
+                  ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
+                  : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+                }
+              </button>
+              {isOpen && (
+                <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+                  <Markdown content={text} />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -337,8 +442,11 @@ export default function ReportsPage() {
   const [mobileShowDetail, setMobileShowDetail] = useState(false)
   const [showDiscovery, setShowDiscovery] = useState(false)
   const [discoveryIdea, setDiscoveryIdea] = useState('')
+  const [discoveryLens, setDiscoveryLens] = useState('다양하게')
   const [discovering, setDiscovering] = useState(false)
   const [discoveryStream, setDiscoveryStream] = useState('')
+  const [discoverySaved, setDiscoverySaved] = useState(false)
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null)
   const discoveryRef = useRef<HTMLDivElement>(null)
   const [reviewingPortfolio, setReviewingPortfolio] = useState(false)
   const [portfolioReviewStream, setPortfolioReviewStream] = useState('')
@@ -415,7 +523,7 @@ export default function ReportsPage() {
   }
 
   async function deleteReport(r: Report) {
-    if (!confirm(`"${TYPE_LABEL[r.type] ?? r.type}${r.ticker_symbol ? ` — ${r.ticker_symbol}` : ''}" 보고서를 삭제할까요? 코멘트도 함께 삭제됩니다.`)) return
+    if (!confirm(`"${TYPE_LABEL[r.type] ?? r.type}${r.ticker_name ?? r.ticker_symbol ? ` — ${r.ticker_name ?? r.ticker_symbol}` : ''}" 보고서를 삭제할까요? 코멘트도 함께 삭제됩니다.`)) return
     const res = await fetch(`/api/reports/${r.id}`, { method: 'DELETE' })
     if (res.ok || res.status === 204) {
       const next = reports.filter(x => x.id !== r.id)
@@ -568,6 +676,7 @@ export default function ReportsPage() {
     setReviewingPortfolio(true)
     setPortfolioReviewStream('')
     setShowPortfolioStream(true)
+    let savedReportId: string | undefined
     try {
       const res = await fetch('/api/reports/portfolio-review', { method: 'POST' })
       if (!res.ok) {
@@ -595,16 +704,7 @@ export default function ReportsPage() {
                 portfolioReviewRef.current.scrollTop = portfolioReviewRef.current.scrollHeight
               }
             } else if (data.type === 'saved') {
-              const savedId: string | undefined = data.report_id
-              const res2 = await fetch('/api/reports')
-              if (res2.ok) {
-                const updated: Report[] = await res2.json()
-                setReports(updated)
-                if (savedId) {
-                  const found = updated.find(r => r.id === savedId)
-                  if (found) setSelected(found)
-                }
-              }
+              savedReportId = data.report_id
             }
           } catch { /* ignore */ }
         }
@@ -612,6 +712,18 @@ export default function ReportsPage() {
     } catch (e) {
       console.error(e)
     } finally {
+      // 스트림 종료 후 무조건 목록 갱신
+      try {
+        const res2 = await fetch('/api/reports')
+        if (res2.ok) {
+          const updated: Report[] = await res2.json()
+          setReports(updated)
+          if (savedReportId) {
+            const found = updated.find(r => r.id === savedReportId)
+            if (found) setSelected(found)
+          }
+        }
+      } catch { /* ignore */ }
       setReviewingPortfolio(false)
     }
   }
@@ -620,11 +732,17 @@ export default function ReportsPage() {
     if (!discoveryIdea.trim() || discovering) return
     setDiscovering(true)
     setDiscoveryStream('')
+    setDiscoverySaved(false)
+    setDiscoveryError(null)
+    // 스트리밍 전 현재 보고서 ID 목록 기억 (신규 보고서 감지용)
+    const prevIds = new Set(reports.map(r => r.id))
+    let savedReportId: string | undefined
+    let hadDiscoveryError = false
     try {
       const res = await fetch('/api/reports/discovery', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea: discoveryIdea }),
+        body: JSON.stringify({ idea: discoveryIdea, lens: discoveryLens }),
       })
       if (!res.ok || !res.body) throw new Error('discovery request failed')
       const reader = res.body.getReader()
@@ -632,37 +750,58 @@ export default function ReportsPage() {
       let buffer = ''
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
+        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
         const lines = buffer.split('\n')
         buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const data = JSON.parse(line.slice(6))
-            if (data.type === 'chunk') {
-              setDiscoveryStream((prev) => prev + data.text)
-              if (discoveryRef.current) {
-                discoveryRef.current.scrollTop = discoveryRef.current.scrollHeight
-              }
-            } else if (data.type === 'saved') {
-              const savedId: string | undefined = data.report_id
-              const res2 = await fetch('/api/reports')
-              if (res2.ok) {
-                const updated: Report[] = await res2.json()
-                setReports(updated)
-                if (savedId) {
-                  const found = updated.find(r => r.id === savedId)
-                  if (found) setSelected(found)
-                }
-              }
+        for (const data of parseSseEvents(lines.join('\n'))) {
+          if (data.type === 'chunk' && typeof data.text === 'string') {
+            setDiscoveryStream((prev) => prev + data.text)
+            if (discoveryRef.current) {
+              discoveryRef.current.scrollTop = discoveryRef.current.scrollHeight
             }
-          } catch { /* ignore */ }
+          } else if ((data.type === 'saved' || data.type === 'done') && typeof data.report_id === 'string') {
+            savedReportId = data.report_id
+            setDiscoverySaved(true)
+          } else if (data.type === 'error' && typeof data.message === 'string') {
+            hadDiscoveryError = true
+            setDiscoveryError(data.message)
+          }
+        }
+        if (done) break
+      }
+      for (const data of parseSseEvents(buffer)) {
+        if ((data.type === 'saved' || data.type === 'done') && typeof data.report_id === 'string') {
+          savedReportId = data.report_id
+          setDiscoverySaved(true)
+        } else if (data.type === 'error' && typeof data.message === 'string') {
+          hadDiscoveryError = true
+          setDiscoveryError(data.message)
         }
       }
     } catch (e) {
       console.error(e)
+      hadDiscoveryError = true
+      setDiscoveryError('종목 탐색 요청 중 오류가 발생했습니다.')
     } finally {
+      // 스트림 종료 후 목록 갱신 — saved 이벤트 수신 여부와 무관하게 신규 보고서 감지
+      try {
+        const res2 = await fetch('/api/reports')
+        if (res2.ok) {
+          const updated: Report[] = await res2.json()
+          setReports(updated)
+          // saved 이벤트로 id를 알면 직접 찾고, 모르면 새로 생긴 discovery 보고서를 찾음
+          const newReport = savedReportId
+            ? updated.find(r => r.id === savedReportId)
+            : updated.find(r => r.type === 'discovery' && !prevIds.has(r.id))
+          if (newReport) {
+            setSelected(newReport)
+            setDiscoverySaved(true)
+            setDiscoveryError(null)
+          } else if (!savedReportId && !hadDiscoveryError) {
+            setDiscoveryError('보고서가 저장되지 않았습니다. 백엔드 로그 확인이 필요합니다.')
+          }
+        }
+      } catch { /* ignore */ }
       setDiscovering(false)
     }
   }
@@ -757,6 +896,23 @@ export default function ReportsPage() {
         <div className="border-b border-gray-800 bg-gray-900">
           <div className="max-w-5xl mx-auto px-3 sm:px-6 py-5 space-y-3">
             <p className="text-sm text-gray-400">투자 아이디어를 입력하면 미국·한국 유망 종목을 탐색합니다.</p>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-400 whitespace-nowrap">탐색 렌즈</label>
+              <select
+                value={discoveryLens}
+                onChange={(e) => setDiscoveryLens(e.target.value)}
+                disabled={discovering}
+                className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-600 disabled:opacity-50"
+              >
+                <option value="다양하게">다양하게 (혼합)</option>
+                <option value="compounding">Compounding — 지속 복리 성장</option>
+                <option value="growth">Growth — 고성장 초기 기업</option>
+                <option value="asset-play">Asset Play — 저평가 자산</option>
+                <option value="turnaround">Turnaround — 회복 촉매</option>
+                <option value="cyclical">Cyclical — 사이클 저점</option>
+                <option value="special-situation">Special Situation — 이벤트 드리븐</option>
+              </select>
+            </div>
             <textarea
               value={discoveryIdea}
               onChange={(e) => setDiscoveryIdea(e.target.value)}
@@ -777,7 +933,13 @@ export default function ReportsPage() {
                 }
               </button>
               {discoveryStream && !discovering && (
-                <span className="text-xs text-emerald-400">완료 — 보고서 목록에 저장됨</span>
+                <span className={`text-xs ${discoveryError ? 'text-rose-400' : discoverySaved ? 'text-emerald-400' : 'text-yellow-500'}`}>
+                  {discoveryError
+                    ? `오류 — ${discoveryError}`
+                    : discoverySaved
+                    ? '완료 — 보고서 목록에 저장됨'
+                    : '완료 — 저장 확인 중...'}
+                </span>
               )}
             </div>
             {(discoveryStream || discovering) && (
@@ -909,8 +1071,13 @@ export default function ReportsPage() {
                             {TYPE_LABEL[r.type] ?? r.type}
                           </span>
                         )}
-                        {r.ticker_symbol && (
-                          <span className="text-xs font-semibold text-white">{r.ticker_symbol}</span>
+                        {(r.ticker_name ?? r.ticker_symbol) && (
+                          <span className="text-xs font-semibold text-white">
+                            {r.ticker_name ?? r.ticker_symbol}
+                            {r.ticker_name && r.ticker_symbol && (
+                              <span className="ml-1 font-normal text-gray-500">{r.ticker_symbol}</span>
+                            )}
+                          </span>
                         )}
                         {isLatest && (
                           <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-300">최신</span>
@@ -945,8 +1112,13 @@ export default function ReportsPage() {
                   <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLOR[selected.type] ?? ''}`}>
                     {TYPE_LABEL[selected.type] ?? selected.type}
                   </span>
-                  {selected.ticker_symbol && (
-                    <span className="text-sm font-bold text-white">{selected.ticker_symbol}</span>
+                  {(selected.ticker_name ?? selected.ticker_symbol) && (
+                    <span className="text-sm font-bold text-white">
+                      {selected.ticker_name ?? selected.ticker_symbol}
+                      {selected.ticker_name && selected.ticker_symbol && (
+                        <span className="ml-1.5 text-xs font-normal text-gray-500">{selected.ticker_symbol}</span>
+                      )}
+                    </span>
                   )}
                   <span className="text-xs text-gray-500">{fmtKST(selected.created_at)}</span>
                   <div className="ml-auto flex items-center gap-1">
