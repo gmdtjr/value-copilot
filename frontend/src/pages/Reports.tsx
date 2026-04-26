@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff, Plus, CheckCircle } from 'lucide-react'
+import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff, Plus, CheckCircle, PanelLeft } from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
+import { ThemeControls } from '../components/ThemeControls'
+import { useTheme } from '../contexts/ThemeContext'
 import type { ReportComment } from '../types'
 
 interface Report {
@@ -39,11 +41,11 @@ const TYPE_LABEL: Record<string, string> = {
 }
 
 const TYPE_COLOR: Record<string, string> = {
-  daily_brief: 'bg-blue-900 text-blue-200',
-  analysis: 'bg-violet-900 text-violet-200',
-  macro: 'bg-amber-900 text-amber-200',
-  discovery: 'bg-emerald-900 text-emerald-200',
-  portfolio_review: 'bg-cyan-900 text-cyan-200',
+  daily_brief: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200',
+  analysis: 'bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-200',
+  macro: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200',
+  discovery: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200',
+  portfolio_review: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200',
 }
 
 // 포트폴리오 점검 보고서의 5섹션
@@ -137,19 +139,19 @@ function DeepReportView({ report }: { report: Report }) {
         if (!text) return null
         const isOpen = openSections.has(key)
         return (
-          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
             <button
               onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
             >
-              <span className="text-white text-sm font-medium">{label}</span>
+              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
               {isOpen
-                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
               }
             </button>
             {isOpen && (
-              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
                 <Markdown content={text} />
               </div>
             )}
@@ -187,19 +189,19 @@ function PortfolioReviewView({ report }: { report: Report }) {
         if (!text) return null
         const isOpen = openSections.has(key)
         return (
-          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
             <button
               onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
             >
-              <span className="text-white text-sm font-medium">{label}</span>
+              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
               {isOpen
-                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
               }
             </button>
             {isOpen && (
-              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
                 <Markdown content={text} />
               </div>
             )}
@@ -254,8 +256,8 @@ function DiscoveryReportView({ report }: { report: Report }) {
   return (
     <div className="space-y-3">
       {extractedTickers.length > 0 && (
-        <div className="bg-gray-800/40 border border-gray-700 rounded-lg px-4 py-3 space-y-2.5">
-          <p className="text-xs text-gray-400 font-medium">추천 종목 — 관심 목록 추가</p>
+        <div className="bg-gray-100 dark:bg-gray-800/40 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 space-y-2.5">
+          <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">추천 종목 — 관심 목록 추가</p>
           <div className="flex flex-wrap gap-2">
             {extractedTickers.map(t => {
               const state = addStates[t.symbol] ?? 'idle'
@@ -269,13 +271,13 @@ function DiscoveryReportView({ report }: { report: Report }) {
                   title={done ? (state === 'added' ? '관심 목록에 추가됨' : '이미 추가된 종목') : t.name}
                   className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
                     done
-                      ? 'border-emerald-700 bg-emerald-900/30 text-emerald-400 cursor-default'
+                      ? 'border-emerald-700 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 cursor-default'
                       : state === 'loading'
-                      ? 'border-gray-600 bg-gray-800 text-gray-500 cursor-wait'
-                      : 'border-gray-600 bg-gray-800 text-gray-300 hover:border-emerald-600 hover:text-white'
+                      ? 'border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-wait'
+                      : 'border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-emerald-500 dark:hover:border-emerald-600 hover:text-gray-900 dark:hover:text-white'
                   }`}
                 >
-                  <span className={`font-medium px-1 py-0.5 rounded text-xs ${isKr ? 'bg-blue-900/60 text-blue-300' : 'bg-violet-900/60 text-violet-300'}`}>
+                  <span className={`font-medium px-1 py-0.5 rounded text-xs ${isKr ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300' : 'bg-violet-100 text-violet-600 dark:bg-violet-900/60 dark:text-violet-300'}`}>
                     {isKr ? 'KR' : 'US'}
                   </span>
                   <span className="font-semibold">{t.symbol}</span>
@@ -290,7 +292,7 @@ function DiscoveryReportView({ report }: { report: Report }) {
             })}
           </div>
           {Object.values(addStates).some(s => s === 'exists') && (
-            <p className="text-xs text-gray-500">초록 체크 = 이미 관심/포트폴리오에 있는 종목</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500">초록 체크 = 이미 관심/포트폴리오에 있는 종목</p>
           )}
         </div>
       )}
@@ -300,19 +302,19 @@ function DiscoveryReportView({ report }: { report: Report }) {
           if (!text) return null
           const isOpen = openSections.has(key)
           return (
-            <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+            <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
               <button
                 onClick={() => toggle(key)}
-                className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+                className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
               >
-                <span className="text-white text-sm font-medium">{label}</span>
+                <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
                 {isOpen
-                  ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
-                  : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+                  ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                  : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
                 }
               </button>
               {isOpen && (
-                <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+                <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
                   <Markdown content={text} />
                 </div>
               )}
@@ -354,19 +356,19 @@ function DailyBriefingView({ report }: { report: Report }) {
         if (!text) return null
         const isOpen = openSections.has(key)
         return (
-          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
             <button
               onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
             >
-              <span className="text-white text-sm font-medium">{label}</span>
+              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
               {isOpen
-                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
               }
             </button>
             {isOpen && (
-              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
                 <Markdown content={text} />
               </div>
             )}
@@ -408,19 +410,19 @@ function MacroReportView({ report }: { report: Report }) {
         if (!text) return null
         const isOpen = openSections.has(key)
         return (
-          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
             <button
               onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
             >
-              <span className="text-white text-sm font-medium">{label}</span>
+              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
               {isOpen
-                ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
+                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
               }
             </button>
             {isOpen && (
-              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
                 <Markdown content={text} />
               </div>
             )}
@@ -433,6 +435,7 @@ function MacroReportView({ report }: { report: Report }) {
 
 export default function ReportsPage() {
   const navigate = useNavigate()
+  const { fontSize } = useTheme()
   const [searchParams] = useSearchParams()
   const [reports, setReports] = useState<Report[]>([])
   const [loading, setLoading] = useState(true)
@@ -440,6 +443,7 @@ export default function ReportsPage() {
   const [triggeringMacro, setTriggeringMacro] = useState(false)
   const [selected, setSelected] = useState<Report | null>(null)
   const [mobileShowDetail, setMobileShowDetail] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [showDiscovery, setShowDiscovery] = useState(false)
   const [discoveryIdea, setDiscoveryIdea] = useState('')
   const [discoveryLens, setDiscoveryLens] = useState('다양하게')
@@ -807,20 +811,28 @@ export default function ReportsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950">
-      <header className="border-b border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
-        <div className="max-w-5xl mx-auto">
+    <div className="min-h-screen bg-white dark:bg-gray-950">
+      <header className="border-b border-gray-200 dark:border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
+        <div className="max-w-[1400px] mx-auto">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-3 flex-shrink-0">
-              <button onClick={() => navigate('/')} className="text-gray-400 hover:text-white transition-colors">
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button onClick={() => navigate('/')} className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
                 <ArrowLeft size={20} />
               </button>
+              <button
+                onClick={() => setSidebarCollapsed(v => !v)}
+                className="hidden lg:flex items-center justify-center w-8 h-8 rounded-lg transition-colors text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
+                title={sidebarCollapsed ? '목록 펼치기' : '목록 접기'}
+              >
+                <PanelLeft size={17} className={sidebarCollapsed ? 'opacity-40' : ''} />
+              </button>
               <div className="flex items-center gap-2">
-                <FileText className="text-blue-400" size={18} />
-                <h1 className="text-base sm:text-lg font-bold text-white">보고서</h1>
+                <FileText className="text-blue-600 dark:text-blue-400" size={18} />
+                <h1 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white">보고서</h1>
               </div>
             </div>
             <div className="flex items-center gap-1.5 flex-wrap justify-end">
+              <ThemeControls />
               <button
                 onClick={runPortfolioReview}
                 disabled={reviewingPortfolio}
@@ -863,14 +875,14 @@ export default function ReportsPage() {
       </header>
 
       {showPortfolioStream && (portfolioReviewStream || reviewingPortfolio) && (
-        <div className="border-b border-gray-800 bg-gray-900">
-          <div className="max-w-5xl mx-auto px-3 sm:px-6 py-4 space-y-2">
+        <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900">
+          <div className="max-w-[1400px] mx-auto px-3 sm:px-6 py-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-cyan-400 font-medium">포트폴리오 점검 진행 중...</span>
+              <span className="text-sm text-cyan-600 dark:text-cyan-400 font-medium">포트폴리오 점검 진행 중...</span>
               {!reviewingPortfolio && (
                 <button
                   onClick={() => setShowPortfolioStream(false)}
-                  className="text-xs text-gray-500 hover:text-gray-300"
+                  className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   닫기
                 </button>
@@ -878,31 +890,31 @@ export default function ReportsPage() {
             </div>
             <div
               ref={portfolioReviewRef}
-              className="bg-gray-950 border border-gray-700 rounded-lg p-4 max-h-64 overflow-y-auto"
+              className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg p-4 max-h-64 overflow-y-auto"
             >
-              <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
+              <pre className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
                 {portfolioReviewStream || ''}
                 {reviewingPortfolio && <span className="animate-pulse">▊</span>}
               </pre>
             </div>
             {!reviewingPortfolio && portfolioReviewStream && (
-              <p className="text-xs text-cyan-400">완료 — 보고서 목록에 저장됨</p>
+              <p className="text-xs text-cyan-600 dark:text-cyan-400">완료 — 보고서 목록에 저장됨</p>
             )}
           </div>
         </div>
       )}
 
       {showDiscovery && (
-        <div className="border-b border-gray-800 bg-gray-900">
-          <div className="max-w-5xl mx-auto px-3 sm:px-6 py-5 space-y-3">
-            <p className="text-sm text-gray-400">투자 아이디어를 입력하면 미국·한국 유망 종목을 탐색합니다.</p>
+        <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900">
+          <div className="max-w-[1400px] mx-auto px-3 sm:px-6 py-5 space-y-3">
+            <p className="text-sm text-gray-500 dark:text-gray-400">투자 아이디어를 입력하면 미국·한국 유망 종목을 탐색합니다.</p>
             <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-400 whitespace-nowrap">탐색 렌즈</label>
+              <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">탐색 렌즈</label>
               <select
                 value={discoveryLens}
                 onChange={(e) => setDiscoveryLens(e.target.value)}
                 disabled={discovering}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-600 disabled:opacity-50"
+                className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-emerald-500 dark:focus:border-emerald-600 disabled:opacity-50"
               >
                 <option value="다양하게">다양하게 (혼합)</option>
                 <option value="compounding">Compounding — 지속 복리 성장</option>
@@ -919,7 +931,7 @@ export default function ReportsPage() {
               placeholder="예: AI 인프라 수요 급증에서 소외된 수혜주, 고령화 사회 헬스케어 중 재무 건전한 기업, 미국 리쇼어링 수혜 산업재..."
               rows={3}
               disabled={discovering}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-emerald-600 disabled:opacity-50"
+              className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 resize-none focus:outline-none focus:border-emerald-500 dark:focus:border-emerald-600 disabled:opacity-50"
             />
             <div className="flex items-center gap-3">
               <button
@@ -933,7 +945,7 @@ export default function ReportsPage() {
                 }
               </button>
               {discoveryStream && !discovering && (
-                <span className={`text-xs ${discoveryError ? 'text-rose-400' : discoverySaved ? 'text-emerald-400' : 'text-yellow-500'}`}>
+                <span className={`text-xs ${discoveryError ? 'text-rose-600 dark:text-rose-400' : discoverySaved ? 'text-emerald-600 dark:text-emerald-400' : 'text-yellow-500'}`}>
                   {discoveryError
                     ? `오류 — ${discoveryError}`
                     : discoverySaved
@@ -945,9 +957,9 @@ export default function ReportsPage() {
             {(discoveryStream || discovering) && (
               <div
                 ref={discoveryRef}
-                className="mt-2 bg-gray-950 border border-gray-700 rounded-lg p-4 max-h-80 overflow-y-auto"
+                className="mt-2 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg p-4 max-h-80 overflow-y-auto"
               >
-                <pre className="text-xs text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
+                <pre className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
                   {discoveryStream || ''}
                   {discovering && <span className="animate-pulse">▊</span>}
                 </pre>
@@ -957,11 +969,11 @@ export default function ReportsPage() {
         </div>
       )}
 
-      <main className="max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+      <main className="max-w-[1400px] mx-auto px-3 sm:px-6 py-4 sm:py-8">
         {/* 모바일/태블릿(<1024px): 목록 또는 본문 전환. 데스크탑(1024px+): 사이드바 레이아웃 */}
         <div className="lg:flex lg:gap-6">
-          {/* 목록 — lg 미만에서는 detail 볼 때 숨김 */}
-          <div className={`lg:w-72 lg:flex-shrink-0 lg:block ${mobileShowDetail ? 'hidden' : 'block'}`}>
+          {/* 목록 — lg 미만에서는 detail 볼 때 숨김, 데스크탑에서는 sidebarCollapsed로 접기 */}
+          <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-in-out ${mobileShowDetail ? 'hidden lg:block' : 'block'} ${sidebarCollapsed ? 'lg:w-0' : 'lg:w-72'}`}>
             {/* 종류 필터 탭 */}
             {!loading && reports.length > 0 && (
               <div className="flex gap-1 overflow-x-auto pb-2 mb-3 scrollbar-hide">
@@ -969,8 +981,8 @@ export default function ReportsPage() {
                   onClick={() => { setFilterType(null); setSelectedIds(new Set()) }}
                   className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${
                     filterType === null
-                      ? 'bg-gray-700 border-gray-600 text-white'
-                      : 'bg-transparent border-gray-700 text-gray-400 hover:text-gray-300'
+                      ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-900 dark:text-white'
+                      : 'bg-transparent border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
                   }`}
                 >
                   전체 {reports.length}
@@ -984,8 +996,8 @@ export default function ReportsPage() {
                       onClick={() => { setFilterType(type); setSelectedIds(new Set()) }}
                       className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${
                         filterType === type
-                          ? `border-transparent text-white ${TYPE_COLOR[type]}`
-                          : 'bg-transparent border-gray-700 text-gray-400 hover:text-gray-300'
+                          ? `border-transparent text-gray-900 dark:text-white ${TYPE_COLOR[type]}`
+                          : 'bg-transparent border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
                       }`}
                     >
                       {label} {count}
@@ -1003,32 +1015,32 @@ export default function ReportsPage() {
                   checked={selectedIds.size > 0 && selectedIds.size === filteredReports.length}
                   ref={(el: HTMLInputElement | null) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < filteredReports.length }}
                   onChange={toggleSelectAll}
-                  className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 accent-blue-500 cursor-pointer"
+                  className="w-3.5 h-3.5 rounded border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 accent-blue-500 cursor-pointer"
                 />
                 {selectedIds.size > 0 ? (
                   <>
-                    <span className="text-xs text-gray-400 flex-1">{selectedIds.size}개 선택됨</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 flex-1">{selectedIds.size}개 선택됨</span>
                     <button
                       onClick={deleteSelected}
                       disabled={deletingBulk}
-                      className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
+                      className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400 hover:text-red-300 disabled:opacity-50 transition-colors"
                     >
                       {deletingBulk ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
                       삭제
                     </button>
                   </>
                 ) : (
-                  <span className="text-xs text-gray-600">전체선택</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-600">전체선택</span>
                 )}
               </div>
             )}
 
-            {loading && <p className="text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
+            {loading && <p className="text-gray-400 dark:text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
             {!loading && reports.length === 0 && (
-              <p className="text-gray-600 text-sm text-center py-8">보고서가 없습니다.</p>
+              <p className="text-gray-500 dark:text-gray-600 text-sm text-center py-8">보고서가 없습니다.</p>
             )}
             {!loading && filteredReports.length === 0 && reports.length > 0 && (
-              <p className="text-gray-600 text-sm text-center py-6">해당 종류의 보고서가 없습니다.</p>
+              <p className="text-gray-500 dark:text-gray-600 text-sm text-center py-6">해당 종류의 보고서가 없습니다.</p>
             )}
             <div className="space-y-2">
               {filteredReports.map((r) => {
@@ -1039,10 +1051,10 @@ export default function ReportsPage() {
                     key={r.id}
                     className={`flex items-stretch rounded-xl border transition-colors ${
                       selected?.id === r.id
-                        ? 'bg-gray-800 border-gray-600'
+                        ? 'bg-gray-100 dark:bg-gray-800 border-gray-400 dark:border-gray-600'
                         : isSelected
-                        ? 'bg-gray-800/60 border-gray-700'
-                        : 'bg-gray-900 border-gray-800 hover:border-gray-700'
+                        ? 'bg-gray-200 dark:bg-gray-800/60 border-gray-300 dark:border-gray-700'
+                        : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700'
                     }`}
                   >
                     {/* 체크박스 */}
@@ -1054,7 +1066,7 @@ export default function ReportsPage() {
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => {}}
-                        className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 accent-blue-500 pointer-events-none"
+                        className="w-3.5 h-3.5 rounded border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 accent-blue-500 pointer-events-none"
                       />
                     </div>
                     {/* 내용 */}
@@ -1067,29 +1079,29 @@ export default function ReportsPage() {
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" title="읽지 않음" />
                         )}
                         {!filterType && (
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLOR[r.type] ?? 'bg-gray-700 text-gray-300'}`}>
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLOR[r.type] ?? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'}`}>
                             {TYPE_LABEL[r.type] ?? r.type}
                           </span>
                         )}
                         {(r.ticker_name ?? r.ticker_symbol) && (
-                          <span className="text-xs font-semibold text-white">
+                          <span className="text-xs font-semibold text-gray-900 dark:text-white">
                             {r.ticker_name ?? r.ticker_symbol}
                             {r.ticker_name && r.ticker_symbol && (
-                              <span className="ml-1 font-normal text-gray-500">{r.ticker_symbol}</span>
+                              <span className="ml-1 font-normal text-gray-400 dark:text-gray-500">{r.ticker_symbol}</span>
                             )}
                           </span>
                         )}
                         {isLatest && (
-                          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-900 text-emerald-300">최신</span>
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">최신</span>
                         )}
                         {r.comment_count > 0 && (
-                          <span className="ml-auto flex items-center gap-0.5 text-xs text-gray-500">
+                          <span className="ml-auto flex items-center gap-0.5 text-xs text-gray-400 dark:text-gray-500">
                             <MessageSquare size={10} />
                             {r.comment_count}
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-gray-500">{fmtKST(r.created_at)}</p>
+                      <p className="text-xs text-gray-400 dark:text-gray-500">{fmtKST(r.created_at)}</p>
                     </button>
                   </div>
                 )
@@ -1098,14 +1110,14 @@ export default function ReportsPage() {
           </div>
 
           {/* 본문 — lg 미만에서는 목록 볼 때 숨김 */}
-          <div className={`lg:flex-1 lg:min-w-0 lg:block ${mobileShowDetail ? 'block' : 'hidden'}`}>
+          <div className={`flex-1 min-w-0 ${mobileShowDetail ? 'block' : 'hidden lg:block'}`}>
             {selected ? (
-              <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
                 {/* 상세 헤더 */}
-                <div className="flex items-center gap-2 px-4 sm:px-6 py-4 border-b border-gray-800 flex-wrap">
+                <div className="flex items-center gap-2 px-4 sm:px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex-wrap">
                   <button
                     onClick={() => setMobileShowDetail(false)}
-                    className="lg:hidden text-gray-400 hover:text-white transition-colors flex-shrink-0"
+                    className="lg:hidden text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors flex-shrink-0"
                   >
                     <ArrowLeft size={18} />
                   </button>
@@ -1113,26 +1125,26 @@ export default function ReportsPage() {
                     {TYPE_LABEL[selected.type] ?? selected.type}
                   </span>
                   {(selected.ticker_name ?? selected.ticker_symbol) && (
-                    <span className="text-sm font-bold text-white">
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">
                       {selected.ticker_name ?? selected.ticker_symbol}
                       {selected.ticker_name && selected.ticker_symbol && (
-                        <span className="ml-1.5 text-xs font-normal text-gray-500">{selected.ticker_symbol}</span>
+                        <span className="ml-1.5 text-xs font-normal text-gray-400 dark:text-gray-500">{selected.ticker_symbol}</span>
                       )}
                     </span>
                   )}
-                  <span className="text-xs text-gray-500">{fmtKST(selected.created_at)}</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">{fmtKST(selected.created_at)}</span>
                   <div className="ml-auto flex items-center gap-1">
                     <button
                       onClick={(e) => toggleRead(selected, e)}
                       title={selected.is_read ? '읽지 않음으로 표시' : '읽음으로 표시'}
-                      className="p-1.5 rounded-lg text-gray-500 hover:text-gray-300 transition-colors"
+                      className="p-1.5 rounded-lg text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
                     >
                       {selected.is_read ? <EyeOff size={15} /> : <Eye size={15} />}
                     </button>
                     <button
                       onClick={() => deleteReport(selected)}
                       title="보고서 삭제"
-                      className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 transition-colors"
+                      className="p-1.5 rounded-lg text-gray-400 dark:text-gray-500 hover:text-red-400 transition-colors"
                     >
                       <Trash2 size={15} />
                     </button>
@@ -1140,7 +1152,7 @@ export default function ReportsPage() {
                 </div>
 
                 {/* 보고서 본문 */}
-                <div className="p-4 sm:p-6">
+                <div className={`p-4 sm:p-6 fs-${fontSize}`}>
                   {selected.type === 'analysis'
                     ? <DeepReportView report={selected} />
                     : selected.type === 'discovery'
@@ -1156,10 +1168,10 @@ export default function ReportsPage() {
                 </div>
 
                 {/* 코멘트 섹션 */}
-                <div className="border-t border-gray-800">
+                <div className="border-t border-gray-200 dark:border-gray-800">
                   <button
                     onClick={toggleComments}
-                    className="w-full flex items-center gap-2 px-4 sm:px-6 py-3 text-sm text-gray-400 hover:text-gray-300 hover:bg-gray-800/30 transition-colors"
+                    className="w-full flex items-center gap-2 px-4 sm:px-6 py-3 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800/30 transition-colors"
                   >
                     <MessageSquare size={14} />
                     <span>코멘트 {selected.comment_count > 0 ? `(${selected.comment_count})` : ''}</span>
@@ -1173,28 +1185,28 @@ export default function ReportsPage() {
                     <div className="px-4 sm:px-6 pb-5 space-y-4">
                       {/* 기존 코멘트 */}
                       {commentsLoading ? (
-                        <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
+                        <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500 text-sm py-2">
                           <Loader2 size={13} className="animate-spin" /> 불러오는 중...
                         </div>
                       ) : comments.length > 0 ? (
                         <div className="space-y-2">
                           {comments.map(c => (
-                            <div key={c.id} className="group bg-gray-800/50 rounded-lg px-4 py-3">
+                            <div key={c.id} className="group bg-gray-200 dark:bg-gray-800/50 rounded-lg px-4 py-3">
                               <div className="flex items-start justify-between gap-2">
-                                <p className="text-sm text-gray-200 leading-relaxed flex-1">{c.content}</p>
+                                <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed flex-1">{c.content}</p>
                                 <button
                                   onClick={() => deleteComment(c.id)}
-                                  className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all flex-shrink-0 mt-0.5"
+                                  className="opacity-0 group-hover:opacity-100 text-gray-500 dark:text-gray-600 hover:text-red-400 transition-all flex-shrink-0 mt-0.5"
                                 >
                                   <X size={13} />
                                 </button>
                               </div>
-                              <p className="text-xs text-gray-600 mt-1.5">{fmtKST(c.created_at)}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-600 mt-1.5">{fmtKST(c.created_at)}</p>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <p className="text-xs text-gray-600 py-1">아직 코멘트가 없습니다.</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-600 py-1">아직 코멘트가 없습니다.</p>
                       )}
 
                       {/* 코멘트 입력 */}
@@ -1206,12 +1218,12 @@ export default function ReportsPage() {
                           placeholder="투자 인사이트, 후속 관찰 사항... (⌘Enter로 저장)"
                           rows={2}
                           disabled={submittingComment}
-                          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-gray-500 disabled:opacity-50"
+                          className="flex-1 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 disabled:opacity-50"
                         />
                         <button
                           onClick={submitComment}
                           disabled={submittingComment || !commentText.trim()}
-                          className="flex-shrink-0 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-white px-3 rounded-lg transition-colors"
+                          className="flex-shrink-0 bg-gray-200 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 text-gray-900 dark:text-white px-3 rounded-lg transition-colors"
                         >
                           {submittingComment ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
                         </button>
@@ -1221,7 +1233,7 @@ export default function ReportsPage() {
                 </div>
               </div>
             ) : (
-              <div className="hidden lg:flex items-center justify-center h-64 text-gray-600">
+              <div className="hidden lg:flex items-center justify-center h-64 text-gray-500 dark:text-gray-600">
                 <p>왼쪽에서 보고서를 선택하세요.</p>
               </div>
             )}

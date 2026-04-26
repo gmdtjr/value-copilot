@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag } from 'lucide-react'
 import { fmtKST } from '../utils/date'
+import { ThemeControls } from '../components/ThemeControls'
 
 // ── TradeLog types & helpers ──────────────────────────────────────────────────
 
@@ -24,10 +25,10 @@ const ACTION_LABEL: Record<string, string> = {
   buy: '신규매수', sell: '전량매도', add: '추가매수', reduce: '일부매도',
 }
 const ACTION_COLOR: Record<string, string> = {
-  buy: 'bg-emerald-900 text-emerald-300',
-  sell: 'bg-red-900 text-red-300',
-  add: 'bg-blue-900 text-blue-300',
-  reduce: 'bg-orange-900 text-orange-300',
+  buy: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
+  sell: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+  add: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
+  reduce: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
 }
 const ACTION_ICON: Record<string, string> = {
   buy: '🟢', sell: '🔴', add: '📈', reduce: '📉',
@@ -95,11 +96,11 @@ function NoteEditor({ log, onSave }: { log: TradeLog; onSave: (id: string, note:
       <div className="mt-2">
         {log.note ? (
           <div className="group flex items-start gap-2 cursor-pointer" onClick={() => { setText(log.note ?? ''); setEditing(true) }}>
-            <p className="text-sm text-gray-300 leading-relaxed flex-1">{log.note}</p>
-            <Pencil size={12} className="text-gray-600 group-hover:text-gray-400 flex-shrink-0 mt-0.5 transition-colors" />
+            <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed flex-1">{log.note}</p>
+            <Pencil size={12} className="text-gray-500 dark:text-gray-600 group-hover:text-gray-400 flex-shrink-0 mt-0.5 transition-colors" />
           </div>
         ) : (
-          <button onClick={() => { setText(''); setEditing(true) }} className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-gray-400 transition-colors">
+          <button onClick={() => { setText(''); setEditing(true) }} className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-600 hover:text-gray-400 transition-colors">
             <Pencil size={12} />
             거래 이유를 기록하세요...
           </button>
@@ -118,14 +119,14 @@ function NoteEditor({ log, onSave }: { log: TradeLog; onSave: (id: string, note:
         rows={3}
         autoFocus
         disabled={saving}
-        className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-gray-500 disabled:opacity-50"
+        className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 disabled:opacity-50"
       />
       <div className="flex items-center gap-2">
         <button onClick={save} disabled={saving || !text.trim()} className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
           {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
           저장
         </button>
-        <button onClick={() => { setEditing(false); setText(log.note ?? '') }} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+        <button onClick={() => { setEditing(false); setText(log.note ?? '') }} className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
           <X size={12} /> 취소
         </button>
       </div>
@@ -180,7 +181,7 @@ function IdeaCard({ memo, onUpdate, onDelete }: {
 
   if (editing) {
     return (
-      <div className="bg-gray-900 border border-blue-700/60 rounded-xl px-4 py-4 space-y-3">
+      <div className="bg-gray-50 dark:bg-gray-900 border border-blue-700/60 rounded-xl px-4 py-4 space-y-3">
         <textarea
           value={text}
           onChange={e => setText(e.target.value)}
@@ -188,23 +189,23 @@ function IdeaCard({ memo, onUpdate, onDelete }: {
           rows={4}
           autoFocus
           disabled={saving}
-          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-gray-500 disabled:opacity-50"
+          className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 disabled:opacity-50"
         />
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 flex-1 max-w-[140px]">
-            <Tag size={11} className="text-gray-500 flex-shrink-0" />
+          <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-2.5 py-1.5 flex-1 max-w-[140px]">
+            <Tag size={11} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
             <input
               value={tag}
               onChange={e => setTag(e.target.value.toUpperCase())}
               placeholder="종목 (선택)"
-              className="bg-transparent text-xs text-gray-300 placeholder-gray-600 focus:outline-none w-full"
+              className="bg-transparent text-xs text-gray-600 dark:text-gray-300 placeholder-gray-300 dark:placeholder-gray-600 focus:outline-none w-full"
             />
           </div>
           <button onClick={save} disabled={saving || !text.trim()} className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors">
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
             저장
           </button>
-          <button onClick={cancel} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+          <button onClick={cancel} className="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
             <X size={12} /> 취소
           </button>
         </div>
@@ -213,11 +214,11 @@ function IdeaCard({ memo, onUpdate, onDelete }: {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-4 group">
+    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-4 group">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm text-gray-200 leading-relaxed flex-1 whitespace-pre-wrap">{memo.content}</p>
+        <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed flex-1 whitespace-pre-wrap">{memo.content}</p>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-          <button onClick={() => setEditing(true)} className="p-1 text-gray-600 hover:text-gray-300 transition-colors">
+          <button onClick={() => setEditing(true)} className="p-1 text-gray-500 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 transition-colors">
             <Pencil size={13} />
           </button>
           <button onClick={() => onDelete(memo.id)} className="p-1 text-gray-700 hover:text-red-400 transition-colors">
@@ -227,11 +228,11 @@ function IdeaCard({ memo, onUpdate, onDelete }: {
       </div>
       <div className="flex items-center gap-2 mt-2">
         {memo.ticker_symbol && (
-          <span className="text-xs bg-violet-900/50 text-violet-300 border border-violet-800/50 px-2 py-0.5 rounded-full font-medium">
+          <span className="text-xs bg-violet-900/50 text-violet-600 dark:text-violet-300 border border-violet-800/50 px-2 py-0.5 rounded-full font-medium">
             {memo.ticker_symbol}
           </span>
         )}
-        <span className="text-xs text-gray-600 ml-auto">{fmtKST(memo.created_at)}</span>
+        <span className="text-xs text-gray-500 dark:text-gray-600 ml-auto">{fmtKST(memo.created_at)}</span>
       </div>
     </div>
   )
@@ -265,7 +266,7 @@ function IdeaComposer({ onCreated }: { onCreated: (memo: IdeaMemo) => void }) {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-700 rounded-xl px-4 py-4 space-y-3">
+    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl px-4 py-4 space-y-3">
       <textarea
         ref={textareaRef}
         value={text}
@@ -274,16 +275,16 @@ function IdeaComposer({ onCreated }: { onCreated: (memo: IdeaMemo) => void }) {
         placeholder="떠오른 투자 아이디어를 기록하세요... (⌘Enter 저장)"
         rows={3}
         disabled={saving}
-        className="w-full bg-transparent text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none disabled:opacity-50"
+        className="w-full bg-transparent text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none disabled:opacity-50"
       />
       <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 flex-1 max-w-[140px]">
-          <Tag size={11} className="text-gray-500 flex-shrink-0" />
+        <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-2.5 py-1.5 flex-1 max-w-[140px]">
+          <Tag size={11} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
           <input
             value={tag}
             onChange={e => setTag(e.target.value.toUpperCase())}
             placeholder="종목 (선택)"
-            className="bg-transparent text-xs text-gray-300 placeholder-gray-600 focus:outline-none w-full"
+            className="bg-transparent text-xs text-gray-600 dark:text-gray-300 placeholder-gray-300 dark:placeholder-gray-600 focus:outline-none w-full"
           />
         </div>
         <button
@@ -371,30 +372,32 @@ export default function JournalPage() {
   const groupedIdeas = groupByDate(ideas, 'created_at')
 
   return (
-    <div className="min-h-screen bg-gray-950">
-      <header className="border-b border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
+    <div className="min-h-screen bg-white dark:bg-gray-950">
+      <header className="border-b border-gray-200 dark:border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/')} className="text-gray-400 hover:text-white transition-colors">
+            <button onClick={() => navigate('/')} className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
               <ArrowLeft size={20} />
             </button>
             <div className="flex items-center gap-2">
               <BookOpen className="text-violet-400" size={18} />
-              <h1 className="text-base sm:text-lg font-bold text-white">투자 일지</h1>
+              <h1 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white">투자 일지</h1>
             </div>
             {tab === 'trade' && unnoted > 0 && (
-              <span className="text-xs bg-amber-700 text-amber-200 font-medium px-2 py-0.5 rounded-full">
+              <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-700 dark:text-amber-200 font-medium px-2 py-0.5 rounded-full">
                 미작성 {unnoted}건
               </span>
             )}
           </div>
 
-          {/* 세그먼트 탭 */}
-          <div className="flex items-center bg-gray-800/60 rounded-lg p-0.5">
+          {/* 세그먼트 탭 + 테마 */}
+          <div className="flex items-center gap-2">
+          <ThemeControls />
+          <div className="flex items-center bg-gray-200 dark:bg-gray-800/60 rounded-lg p-0.5">
             <button
               onClick={() => setTab('trade')}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                tab === 'trade' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-300'
+                tab === 'trade' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               <BookOpen size={12} />
@@ -403,17 +406,18 @@ export default function JournalPage() {
             <button
               onClick={() => setTab('idea')}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                tab === 'idea' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-300'
+                tab === 'idea' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               <Lightbulb size={12} />
               아이디어
               {ideas.length > 0 && (
-                <span className="bg-violet-700 text-violet-200 text-xs px-1.5 py-0 rounded-full leading-5">
+                <span className="bg-violet-100 text-violet-700 dark:bg-violet-700 dark:text-violet-200 text-xs px-1.5 py-0 rounded-full leading-5">
                   {ideas.length}
                 </span>
               )}
             </button>
+          </div>
           </div>
         </div>
       </header>
@@ -427,7 +431,7 @@ export default function JournalPage() {
               <button
                 onClick={() => setTradeFilter('all')}
                 className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  tradeFilter === 'all' ? 'bg-gray-700 border-gray-600 text-white' : 'border-gray-700 text-gray-400 hover:text-gray-300'
+                  tradeFilter === 'all' ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-900 dark:text-white' : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
                 }`}
               >
                 전체 {logs.length}
@@ -435,31 +439,31 @@ export default function JournalPage() {
               <button
                 onClick={() => setTradeFilter('unnoted')}
                 className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  tradeFilter === 'unnoted' ? 'bg-amber-800 border-amber-700 text-amber-200' : 'border-gray-700 text-gray-400 hover:text-gray-300'
+                  tradeFilter === 'unnoted' ? 'bg-amber-100 border-amber-300 dark:bg-amber-800 dark:border-amber-700 text-amber-700 dark:text-amber-200' : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
                 }`}
               >
                 미작성 {unnoted}
               </button>
             </div>
 
-            {logsLoading && <p className="text-gray-500 text-sm text-center py-12">불러오는 중...</p>}
+            {logsLoading && <p className="text-gray-400 dark:text-gray-500 text-sm text-center py-12">불러오는 중...</p>}
             {!logsLoading && logs.length === 0 && (
               <div className="text-center py-16 space-y-2">
-                <p className="text-gray-500 text-sm">아직 감지된 거래가 없습니다.</p>
-                <p className="text-gray-600 text-xs">KIS 동기화를 실행하면 거래가 자동으로 기록됩니다.</p>
+                <p className="text-gray-400 dark:text-gray-500 text-sm">아직 감지된 거래가 없습니다.</p>
+                <p className="text-gray-500 dark:text-gray-600 text-xs">KIS 동기화를 실행하면 거래가 자동으로 기록됩니다.</p>
               </div>
             )}
             {!logsLoading && logs.length > 0 && filtered.length === 0 && (
-              <p className="text-gray-600 text-sm text-center py-12">미작성 거래가 없습니다.</p>
+              <p className="text-gray-500 dark:text-gray-600 text-sm text-center py-12">미작성 거래가 없습니다.</p>
             )}
 
             {groupedLogs.map(({ date, items }) => (
               <section key={date} className="space-y-3">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{date}</p>
+                <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{date}</p>
                 {items.map(log => (
                   <div
                     key={log.id}
-                    className={`bg-gray-900 border rounded-xl px-4 py-4 ${!log.note ? 'border-amber-800/60' : 'border-gray-800'}`}
+                    className={`bg-gray-50 dark:bg-gray-900 border rounded-xl px-4 py-4 ${!log.note ? 'border-amber-800/60' : 'border-gray-200 dark:border-gray-800'}`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
@@ -467,8 +471,8 @@ export default function JournalPage() {
                         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ACTION_COLOR[log.action]}`}>
                           {ACTION_LABEL[log.action]}
                         </span>
-                        <span className="text-sm font-bold text-white">{log.symbol}</span>
-                        <span className="text-xs text-gray-400 truncate">{log.name}</span>
+                        <span className="text-sm font-bold text-gray-900 dark:text-white">{log.symbol}</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate">{log.name}</span>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         {!log.note && <span className="text-xs text-amber-500 font-medium">미작성</span>}
@@ -478,9 +482,9 @@ export default function JournalPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                      <span className="text-sm text-gray-300 font-medium">{qtyChange(log)}</span>
-                      {priceStr(log) && <span className="text-xs text-gray-500">{priceStr(log)}</span>}
-                      <span className="text-xs text-gray-600 ml-auto">{fmtKST(log.detected_at)}</span>
+                      <span className="text-sm text-gray-600 dark:text-gray-300 font-medium">{qtyChange(log)}</span>
+                      {priceStr(log) && <span className="text-xs text-gray-400 dark:text-gray-500">{priceStr(log)}</span>}
+                      <span className="text-xs text-gray-500 dark:text-gray-600 ml-auto">{fmtKST(log.detected_at)}</span>
                     </div>
                     <NoteEditor log={log} onSave={handleSaveNote} />
                   </div>
@@ -495,18 +499,18 @@ export default function JournalPage() {
           <>
             <IdeaComposer onCreated={handleIdeaCreated} />
 
-            {ideasLoading && <p className="text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
+            {ideasLoading && <p className="text-gray-400 dark:text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
             {!ideasLoading && ideas.length === 0 && (
               <div className="text-center py-16 space-y-2">
                 <Lightbulb size={32} className="text-gray-700 mx-auto" />
-                <p className="text-gray-500 text-sm">아직 기록된 아이디어가 없습니다.</p>
-                <p className="text-gray-600 text-xs">떠오른 투자 아이디어를 바로 메모하세요.</p>
+                <p className="text-gray-400 dark:text-gray-500 text-sm">아직 기록된 아이디어가 없습니다.</p>
+                <p className="text-gray-500 dark:text-gray-600 text-xs">떠오른 투자 아이디어를 바로 메모하세요.</p>
               </div>
             )}
 
             {groupedIdeas.map(({ date, items }) => (
               <section key={date} className="space-y-3">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{date}</p>
+                <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">{date}</p>
                 {items.map(memo => (
                   <IdeaCard
                     key={memo.id}

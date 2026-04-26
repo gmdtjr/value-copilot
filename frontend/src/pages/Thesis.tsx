@@ -8,7 +8,10 @@ import {
 import { api } from '../api'
 import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
+import { ThemeControls } from '../components/ThemeControls'
+import { useTheme } from '../contexts/ThemeContext'
 import type { Thesis, Ticker, FinancialData, SecSummary } from '../types'
+
 
 type DataStatus = {
   has_data: boolean
@@ -129,16 +132,16 @@ function ReportAccordion({ report }: { report: TickerReport }) {
         if (!text) return null
         const isOpen = open.has(key)
         return (
-          <div key={key} className="border border-gray-700 rounded-lg overflow-hidden">
+          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
             <button
               onClick={() => setOpen(prev => { const s = new Set(prev); isOpen ? s.delete(key) : s.add(key); return s })}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-800 hover:bg-gray-750 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
             >
-              <span className="text-white text-sm font-medium">{label}</span>
-              {isOpen ? <ChevronUp size={14} className="text-gray-400 flex-shrink-0" /> : <ChevronDown size={14} className="text-gray-400 flex-shrink-0" />}
+              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
+              {isOpen ? <ChevronUp size={14} className="text-gray-500 dark:text-gray-400 flex-shrink-0" /> : <ChevronDown size={14} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />}
             </button>
             {isOpen && (
-              <div className="px-4 py-4 bg-gray-900 border-t border-gray-700">
+              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
                 <Markdown content={text} />
               </div>
             )}
@@ -161,12 +164,12 @@ function TickerReportsTab({ tickerId }: { tickerId: string }) {
       .finally(() => setLoading(false))
   }, [tickerId])
 
-  if (loading) return <div className="flex items-center justify-center py-20 text-gray-500 gap-2"><Loader2 size={16} className="animate-spin" /> 불러오는 중...</div>
+  if (loading) return <div className="flex items-center justify-center py-20 text-gray-400 dark:text-gray-500 gap-2"><Loader2 size={16} className="animate-spin" /> 불러오는 중...</div>
 
   if (reports.length === 0) return (
-    <div className="text-center py-20 text-gray-600">
+    <div className="text-center py-20 text-gray-500 dark:text-gray-600">
       <FileText size={40} className="mx-auto mb-3 text-gray-700" />
-      <p className="text-gray-500">아직 생성된 보고서가 없습니다.</p>
+      <p className="text-gray-400 dark:text-gray-500">아직 생성된 보고서가 없습니다.</p>
       <p className="text-sm mt-1">헤더의 "보고서" 버튼으로 생성하세요.</p>
     </div>
   )
@@ -183,13 +186,13 @@ function TickerReportsTab({ tickerId }: { tickerId: string }) {
               onClick={() => setSelected(r)}
               className={`text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
                 selected?.id === r.id
-                  ? 'bg-gray-700 border-gray-500 text-white'
-                  : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600'
+                  ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-500 text-gray-900 dark:text-white'
+                  : 'bg-gray-50 dark:bg-gray-900 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-600'
               }`}
             >
               <span className="block font-medium">{fmtKST(r.created_at, 'date')}</span>
-              <span className="text-gray-500">{fmtKST(r.created_at, 'time')}</span>
-              {isLatest && <span className="ml-1 text-emerald-400">●</span>}
+              <span className="text-gray-400 dark:text-gray-500">{fmtKST(r.created_at, 'time')}</span>
+              {isLatest && <span className="ml-1 text-emerald-600 dark:text-emerald-400">●</span>}
             </button>
           )
         })}
@@ -197,8 +200,8 @@ function TickerReportsTab({ tickerId }: { tickerId: string }) {
 
       {/* 선택된 보고서 본문 */}
       {selected && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-4">
+        <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
             {fmtKST(selected.created_at)}
           </p>
           <ReportAccordion report={selected} />
@@ -230,9 +233,9 @@ function fmt(val: number | string | null | undefined, type: 'x' | 'pct' | 'price
 function MetricCard({ label, value }: { label: string; value: string }) {
   const isNA = value === 'N/A'
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 min-w-0">
-      <p className="text-xs text-gray-500 mb-1 truncate">{label}</p>
-      <p className={`text-base font-semibold ${isNA ? 'text-gray-600' : 'text-white'}`}>{value}</p>
+    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-4 py-3 min-w-0">
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-1 truncate">{label}</p>
+      <p className={`text-base font-semibold ${isNA ? 'text-gray-500 dark:text-gray-600' : 'text-gray-900 dark:text-white'}`}>{value}</p>
     </div>
   )
 }
@@ -242,16 +245,16 @@ function DataSection({
 }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-800/50 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
       >
-        <span className="text-white font-medium text-sm">{title}</span>
-        {open ? <ChevronUp size={15} className="text-gray-400 flex-shrink-0" /> : <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />}
+        <span className="text-gray-900 dark:text-white font-medium text-sm">{title}</span>
+        {open ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" /> : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />}
       </button>
       {open && (
-        <div className="px-5 pb-5 border-t border-gray-800">
+        <div className="px-5 pb-5 border-t border-gray-200 dark:border-gray-800">
           <div className="pt-4">{children}</div>
         </div>
       )}
@@ -261,7 +264,7 @@ function DataSection({
 
 function PreText({ text }: { text: string }) {
   return (
-    <pre className="text-gray-300 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
+    <pre className="text-gray-600 dark:text-gray-300 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words">
       {text.trim() || '데이터 없음'}
     </pre>
   )
@@ -275,17 +278,17 @@ function SecSummaryCard({ s }: { s: SecSummary }) {
     { label: 'MD&A / 경영 현황', text: s.mda_summary },
   ]
   return (
-    <div className="border border-gray-700 rounded-lg overflow-hidden mb-2 last:mb-0">
+    <div className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden mb-2 last:mb-0">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-800/30 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800/30 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <span className="text-xs font-medium text-blue-400 bg-blue-900/30 px-2 py-0.5 rounded">
+          <span className="text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-900/30 px-2 py-0.5 rounded">
             {s.filing_type}
           </span>
-          <span className="text-sm text-gray-200">{s.report_period}</span>
-          <span className="text-xs text-gray-500">
+          <span className="text-sm text-gray-700 dark:text-gray-200">{s.report_period}</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">
             {fmtKST(s.summarized_at, 'date')}
           </span>
         </div>
@@ -296,19 +299,19 @@ function SecSummaryCard({ s }: { s: SecSummary }) {
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
-              className="text-gray-500 hover:text-gray-300"
+              className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
             >
               <ExternalLink size={13} />
             </a>
           )}
-          {open ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+          {open ? <ChevronUp size={14} className="text-gray-500 dark:text-gray-400" /> : <ChevronDown size={14} className="text-gray-500 dark:text-gray-400" />}
         </div>
       </button>
       {open && (
-        <div className="border-t border-gray-700 divide-y divide-gray-700/50">
+        <div className="border-t border-gray-300 dark:border-gray-700 divide-y divide-gray-700/50">
           {subsections.map(({ label, text }) => text ? (
             <div key={label} className="px-4 py-3">
-              <p className="text-xs font-medium text-gray-400 mb-2">{label}</p>
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">{label}</p>
               <Markdown content={text} />
             </div>
           ) : null)}
@@ -336,9 +339,9 @@ function FinancialDataTab({
 
   if (!hasData) {
     return (
-      <div className="text-center py-20 text-gray-600">
+      <div className="text-center py-20 text-gray-500 dark:text-gray-600">
         <Database size={40} className="mx-auto mb-3 text-gray-700" />
-        <p className="text-gray-500">재무 데이터가 없습니다.</p>
+        <p className="text-gray-400 dark:text-gray-500">재무 데이터가 없습니다.</p>
         <p className="text-sm mt-1">헤더의 "데이터 수집" 버튼으로 먼저 수집하세요.</p>
       </div>
     )
@@ -346,7 +349,7 @@ function FinancialDataTab({
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20 text-gray-500 gap-2">
+      <div className="flex items-center justify-center py-20 text-gray-400 dark:text-gray-500 gap-2">
         <Loader2 size={16} className="animate-spin" /> 불러오는 중...
       </div>
     )
@@ -354,7 +357,7 @@ function FinancialDataTab({
 
   if (error || !data) {
     return (
-      <div className="py-10 text-center text-red-400 text-sm">
+      <div className="py-10 text-center text-red-600 dark:text-red-400 text-sm">
         <AlertTriangle size={16} className="inline mr-2" />
         {error || '데이터를 불러올 수 없습니다.'}
       </div>
@@ -387,7 +390,7 @@ function FinancialDataTab({
     <div className="space-y-4">
       {/* Cache timestamp */}
       {latestFetch && (
-        <p className="text-xs text-gray-600 text-right">
+        <p className="text-xs text-gray-500 dark:text-gray-600 text-right">
           마지막 수집: {fmtKST(latestFetch.fetched_at)}
         </p>
       )}
@@ -449,6 +452,7 @@ function FinancialDataTab({
 export default function ThesisPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { fontSize } = useTheme()
 
   const [ticker, setTicker] = useState<Ticker | null>(null)
   const [thesis, setThesis] = useState<Thesis | null>(null)
@@ -648,9 +652,9 @@ export default function ThesisPage() {
   }
 
   const statusColor = {
-    draft: 'text-yellow-400',
-    confirmed: 'text-emerald-400',
-    needs_review: 'text-red-400',
+    draft: 'text-yellow-600 dark:text-yellow-400',
+    confirmed: 'text-emerald-600 dark:text-emerald-400',
+    needs_review: 'text-red-600 dark:text-red-400',
   }
   const statusLabel = {
     draft: '초안 (Draft)',
@@ -660,7 +664,7 @@ export default function ThesisPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-gray-500">
+      <div className="min-h-screen flex items-center justify-center text-gray-400 dark:text-gray-500">
         불러오는 중...
       </div>
     )
@@ -668,7 +672,7 @@ export default function ThesisPage() {
 
   if (error || !ticker) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-red-400">
+      <div className="min-h-screen flex items-center justify-center text-red-600 dark:text-red-400">
         {error || '종목을 찾을 수 없습니다.'}
       </div>
     )
@@ -677,17 +681,17 @@ export default function ThesisPage() {
   const hasContent = thesis?.thesis || thesis?.risk || thesis?.key_assumptions || thesis?.valuation
 
   return (
-    <div className="min-h-screen bg-gray-950">
+    <div className="min-h-screen bg-white dark:bg-gray-950">
       {/* Header */}
-      <header className="border-b border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
+      <header className="border-b border-gray-200 dark:border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
         <div className="max-w-4xl mx-auto flex items-start sm:items-center justify-between gap-2">
           <div className="flex items-center gap-3 flex-shrink-0">
-            <button onClick={() => navigate('/')} className="text-gray-400 hover:text-white transition-colors">
+            <button onClick={() => navigate('/')} className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
               <ArrowLeft size={20} />
             </button>
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-white text-lg sm:text-xl font-bold">{ticker.name}</span>
+                <span className="text-gray-900 dark:text-white text-lg sm:text-xl font-bold">{ticker.name}</span>
                 {thesis && (
                   <span className={`text-xs sm:text-sm font-medium ${statusColor[thesis.confirmed]}`}>
                     {statusLabel[thesis.confirmed]}
@@ -695,9 +699,9 @@ export default function ThesisPage() {
                 )}
               </div>
               <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-xs text-gray-500 font-mono">{ticker.symbol}</span>
-                <span className="text-xs text-gray-600">·</span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{ticker.symbol}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-600">·</span>
+                <span className="text-xs text-gray-400 dark:text-gray-500">
                   {ticker.market === 'US_Stock' ? 'US' : 'KR'}
                 </span>
               </div>
@@ -705,10 +709,11 @@ export default function ThesisPage() {
           </div>
 
           <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
+            <ThemeControls />
             {(thesis?.confirmed === 'draft' || thesis?.confirmed === 'needs_review') && hasContent && (
               <button
                 onClick={handleConfirm}
-                className={`flex items-center gap-1.5 text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors ${
+                className={`flex items-center gap-1.5 text-gray-900 dark:text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors ${
                   thesis.confirmed === 'needs_review'
                     ? 'bg-orange-700 hover:bg-orange-600'
                     : 'bg-emerald-700 hover:bg-emerald-600'
@@ -736,9 +741,9 @@ export default function ThesisPage() {
               title={dataStatus?.fetched_at
                 ? `마지막 업데이트: ${fmtKST(dataStatus.fetched_at)}`
                 : '재무 데이터 없음 — 클릭하여 수집'}
-              className={`flex items-center gap-1.5 text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors disabled:opacity-50 ${
+              className={`flex items-center gap-1.5 text-gray-900 dark:text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors disabled:opacity-50 ${
                 dataStatus?.has_data
-                  ? 'bg-gray-700 hover:bg-gray-600'
+                  ? 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600'
                   : 'bg-orange-700 hover:bg-orange-600'
               }`}
             >
@@ -773,7 +778,7 @@ export default function ThesisPage() {
       </header>
 
       {/* Tab bar */}
-      <div className="border-b border-gray-800 px-3 sm:px-6">
+      <div className="border-b border-gray-200 dark:border-gray-800 px-3 sm:px-6">
         <div className="max-w-4xl mx-auto flex gap-1">
           {([
             { id: 'thesis', label: 'Thesis', icon: <Sparkles size={14} /> },
@@ -786,7 +791,7 @@ export default function ThesisPage() {
               className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
                 activeTab === tab.id
                   ? 'border-violet-500 text-violet-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-300'
+                  : 'border-transparent text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               {tab.icon}
@@ -799,7 +804,7 @@ export default function ThesisPage() {
         </div>
       </div>
 
-      <main className="max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4">
+      <main className={`max-w-4xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 fs-${fontSize}`}>
         {/* ── Thesis Tab ── */}
         {activeTab === 'thesis' && (
           <>
@@ -807,8 +812,8 @@ export default function ThesisPage() {
             {dataStatus && (
               <div className={`rounded-lg px-4 py-3 text-sm flex items-center gap-3 ${
                 dataStatus.has_data
-                  ? 'bg-gray-900 border border-gray-800 text-gray-400'
-                  : 'bg-orange-900/20 border border-orange-800 text-orange-300'
+                  ? 'bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-500 dark:text-gray-400'
+                  : 'bg-orange-900/20 border border-orange-800 text-orange-700 dark:text-orange-300'
               }`}>
                 <Database size={15} className="flex-shrink-0" />
                 {dataStatus.has_data ? (
@@ -835,24 +840,24 @@ export default function ThesisPage() {
 
             {/* Report / error messages */}
             {reportMsg && (
-              <div className="bg-blue-900/30 border border-blue-800 rounded-lg p-4 text-blue-300 text-sm flex items-center gap-2">
+              <div className="bg-blue-900/30 border border-blue-800 rounded-lg p-4 text-blue-700 dark:text-blue-300 text-sm flex items-center gap-2">
                 <FileText size={16} /> {reportMsg}
               </div>
             )}
             {analyzeError && (
-              <div className="bg-red-900/30 border border-red-800 rounded-lg p-4 text-red-300 text-sm flex items-center gap-2">
+              <div className="bg-red-900/30 border border-red-800 rounded-lg p-4 text-red-700 dark:text-red-300 text-sm flex items-center gap-2">
                 <AlertTriangle size={16} /> {analyzeError}
               </div>
             )}
 
             {/* Streaming indicator */}
             {(analyzeState === 'streaming' || refineState === 'streaming') && (
-              <div className="bg-gray-900 border border-violet-800 rounded-xl p-5">
+              <div className="bg-gray-50 dark:bg-gray-900 border border-violet-800 rounded-xl p-5">
                 <div className="flex items-center gap-2 text-violet-400 text-sm mb-3">
                   <Loader2 size={14} className="animate-spin" />
                   {refineState === 'streaming' ? 'AI가 피드백을 반영하여 thesis를 수정하고 있습니다...' : 'AI가 thesis를 생성하고 있습니다...'}
                 </div>
-                <pre className="text-gray-300 text-sm whitespace-pre-wrap font-mono leading-relaxed max-h-96 overflow-y-auto">
+                <pre className="text-gray-600 dark:text-gray-300 text-sm whitespace-pre-wrap font-mono leading-relaxed max-h-96 overflow-y-auto">
                   {streamText}
                   <span className="animate-pulse">▋</span>
                 </pre>
@@ -861,26 +866,26 @@ export default function ThesisPage() {
 
             {/* No content yet */}
             {analyzeState === 'idle' && !hasContent && (
-              <div className="text-center py-24 text-gray-600">
+              <div className="text-center py-24 text-gray-500 dark:text-gray-600">
                 <Sparkles size={48} className="mx-auto mb-4 text-gray-800" />
-                <p className="text-lg text-gray-500">아직 Thesis가 없습니다.</p>
+                <p className="text-lg text-gray-400 dark:text-gray-500">아직 Thesis가 없습니다.</p>
                 <p className="text-sm mt-1">"AI 분석" 버튼으로 초안을 생성하세요.</p>
               </div>
             )}
 
             {/* stock_type 배지 + seed_memo */}
             {hasContent && thesis?.stock_type && (
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-2">
+              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-500">투자 유형</span>
-                  <span className="px-2.5 py-1 bg-violet-900/50 border border-violet-700 text-violet-300 text-xs font-medium rounded-full">
+                  <span className="text-xs text-gray-400 dark:text-gray-500">투자 유형</span>
+                  <span className="px-2.5 py-1 bg-violet-900/50 border border-violet-700 text-violet-600 dark:text-violet-300 text-xs font-medium rounded-full">
                     {STOCK_TYPE_LABEL[thesis.stock_type] ?? thesis.stock_type}
                   </span>
                 </div>
                 {thesis.seed_memo && (
                   <div>
-                    <p className="text-xs text-gray-500 mb-1">나의 초기 관점</p>
-                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{thesis.seed_memo}</p>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">나의 초기 관점</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{thesis.seed_memo}</p>
                   </div>
                 )}
               </div>
@@ -892,16 +897,16 @@ export default function ThesisPage() {
               if (!content) return null
               const isOpen = openSections.has(key)
               return (
-                <div key={key} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                <div key={key} className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
                   <button
                     onClick={() => toggleSection(key)}
-                    className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-800/50 transition-colors"
+                    className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
                   >
-                    <span className="text-white font-medium">{label}</span>
-                    {isOpen ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                    <span className="text-gray-900 dark:text-white font-medium">{label}</span>
+                    {isOpen ? <ChevronUp size={16} className="text-gray-500 dark:text-gray-400" /> : <ChevronDown size={16} className="text-gray-500 dark:text-gray-400" />}
                   </button>
                   {isOpen && (
-                    <div className="px-5 pb-5 border-t border-gray-800">
+                    <div className="px-5 pb-5 border-t border-gray-200 dark:border-gray-800">
                       <div className="pt-4">
                         <Markdown content={content} />
                       </div>
@@ -913,12 +918,12 @@ export default function ThesisPage() {
 
             {/* Feedback loop */}
             {hasContent && thesis?.confirmed !== 'confirmed' && analyzeState !== 'streaming' && (
-              <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 space-y-3">
-                <div className="flex items-center gap-2 text-gray-300 text-sm font-medium">
+              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl p-5 space-y-3">
+                <div className="flex items-center gap-2 text-gray-600 dark:text-gray-300 text-sm font-medium">
                   <MessageSquare size={15} />
                   피드백으로 Thesis 수정
                   {refineCount > 0 && (
-                    <span className="ml-auto text-xs text-gray-500">{refineCount}회 반영됨</span>
+                    <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">{refineCount}회 반영됨</span>
                   )}
                 </div>
                 <textarea
@@ -927,10 +932,10 @@ export default function ThesisPage() {
                   disabled={refineState === 'streaming'}
                   placeholder="예: 경쟁사 대비 해자(moat) 분석을 더 구체적으로 써줘. 밸류에이션에서 DCF 할인율 가정을 더 보수적으로 조정해줘."
                   rows={4}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600 disabled:opacity-50"
+                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600 disabled:opacity-50"
                 />
                 {refineError && (
-                  <div className="flex items-center gap-2 text-red-400 text-sm">
+                  <div className="flex items-center gap-2 text-red-600 dark:text-red-400 text-sm">
                     <AlertTriangle size={14} /> {refineError}
                   </div>
                 )}
@@ -950,7 +955,7 @@ export default function ThesisPage() {
             )}
 
             {thesis?.last_analyzed_at && (
-              <p className="text-xs text-gray-600 text-right">
+              <p className="text-xs text-gray-500 dark:text-gray-600 text-right">
                 마지막 분석: {fmtKST(thesis.last_analyzed_at)}
               </p>
             )}
@@ -970,19 +975,19 @@ export default function ThesisPage() {
       {/* AI 분석 모달 */}
       {showAnalyzeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-lg p-6 space-y-5 max-h-[90vh] overflow-y-auto">
             <div>
-              <h2 className="text-white font-semibold text-lg flex items-center gap-2">
+              <h2 className="text-gray-900 dark:text-white font-semibold text-lg flex items-center gap-2">
                 <Sparkles size={18} className="text-violet-400" /> AI 분석 — 관점 설정
               </h2>
-              <p className="text-gray-400 text-sm mt-1">
+              <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
                 나의 관점을 먼저 설정하면 AI가 그 방향으로 thesis 초안을 작성합니다.
               </p>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-gray-300 font-medium">투자 유형 (Stock Type)</label>
-              <p className="text-xs text-gray-500">보고서에서 본 패턴과 맞는 유형을 고르세요.</p>
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium">투자 유형 (Stock Type)</label>
+              <p className="text-xs text-gray-400 dark:text-gray-500">보고서에서 본 패턴과 맞는 유형을 고르세요.</p>
               <div className="grid grid-cols-1 gap-1.5 max-h-72 overflow-y-auto pr-1">
                 {STOCK_TYPE_OPTIONS.map((opt) => {
                   const selected = modalStockType === opt.value
@@ -993,18 +998,18 @@ export default function ThesisPage() {
                       className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
                         selected
                           ? 'bg-violet-900/40 border-violet-600'
-                          : 'bg-gray-800 border-gray-700 hover:border-gray-500'
+                          : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 hover:border-gray-500'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
                         <div className="flex items-center gap-2">
-                          <span className={`font-semibold text-sm ${selected ? 'text-violet-200' : 'text-white'}`}>
+                          <span className={`font-semibold text-sm ${selected ? 'text-violet-700 dark:text-violet-200' : 'text-gray-900 dark:text-white'}`}>
                             {opt.label}
                           </span>
-                          <span className="text-xs text-gray-500">{opt.desc}</span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500">{opt.desc}</span>
                         </div>
                         <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          selected ? 'bg-violet-800 text-violet-300' : 'bg-gray-700 text-gray-400'
+                          selected ? 'bg-violet-100 text-violet-600 dark:bg-violet-800 dark:text-violet-300' : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                         }`}>
                           {opt.valuation}
                         </span>
@@ -1012,7 +1017,7 @@ export default function ThesisPage() {
                       <div className="flex flex-wrap gap-1">
                         {opt.signals.map((s) => (
                           <span key={s} className={`text-xs px-1.5 py-0.5 rounded ${
-                            selected ? 'bg-violet-900/60 text-violet-300' : 'bg-gray-700/60 text-gray-400'
+                            selected ? 'bg-violet-100 text-violet-600 dark:bg-violet-900/60 dark:text-violet-300' : 'bg-gray-200 dark:bg-gray-700/60 text-gray-500 dark:text-gray-400'
                           }`}>
                             {s}
                           </span>
@@ -1025,23 +1030,23 @@ export default function ThesisPage() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-gray-300 font-medium">
-                나의 초기 관점 <span className="text-red-400">*</span>
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium">
+                나의 초기 관점 <span className="text-red-600 dark:text-red-400">*</span>
               </label>
               <textarea
                 value={modalSeedMemo}
                 onChange={(e) => setModalSeedMemo(e.target.value)}
                 placeholder={SEED_MEMO_PLACEHOLDER[modalStockType] ?? `이 종목을 ${STOCK_TYPE_LABEL[modalStockType]} 관점으로 보는 이유를 작성하세요.`}
                 rows={5}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
               />
-              <p className="text-xs text-gray-500">AI는 이 관점을 기반으로 thesis를 작성합니다. 구체적일수록 결과물이 좋아집니다.</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">AI는 이 관점을 기반으로 thesis를 작성합니다. 구체적일수록 결과물이 좋아집니다.</p>
             </div>
 
             <div className="flex gap-3 justify-end pt-1">
               <button
                 onClick={() => setShowAnalyzeModal(false)}
-                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-200 transition-colors"
               >
                 취소
               </button>

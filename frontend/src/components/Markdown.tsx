@@ -13,11 +13,11 @@ function parseInline(text: string, keyPrefix: string): React.ReactNode {
     const raw = match[0]
     const k = `${keyPrefix}-i${idx++}`
     if (raw.startsWith('**'))
-      parts.push(<strong key={k} className="font-semibold text-white">{raw.slice(2, -2)}</strong>)
+      parts.push(<strong key={k} className="font-semibold text-gray-900 dark:text-white">{raw.slice(2, -2)}</strong>)
     else if (raw.startsWith('*'))
-      parts.push(<em key={k} className="italic text-gray-200">{raw.slice(1, -1)}</em>)
+      parts.push(<em key={k} className="italic text-gray-700 dark:text-gray-200">{raw.slice(1, -1)}</em>)
     else
-      parts.push(<code key={k} className="bg-gray-800 text-emerald-300 px-1 py-0.5 rounded text-xs font-mono">{raw.slice(1, -1)}</code>)
+      parts.push(<code key={k} className="bg-gray-100 dark:bg-gray-800 text-emerald-600 dark:text-emerald-300 px-1 py-0.5 rounded text-xs font-mono">{raw.slice(1, -1)}</code>)
     last = match.index + raw.length
   }
   if (last < text.length) parts.push(text.slice(last))
@@ -49,14 +49,14 @@ function TableBlock({ lines, blockKey }: { lines: string[]; blockKey: string }) 
   const rows = dataLines.map(splitTableRow)
 
   return (
-    <div className="overflow-x-auto my-4 rounded-lg border border-gray-700">
+    <div className="overflow-x-auto my-4 rounded-lg border border-gray-300 dark:border-gray-700">
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="bg-gray-800/80">
+          <tr className="bg-gray-200 dark:bg-gray-800/80">
             {headers.map((h, j) => (
               <th
                 key={j}
-                className="px-4 py-2.5 text-left text-xs font-semibold text-gray-300 whitespace-nowrap border-b border-gray-700"
+                className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap border-b border-gray-300 dark:border-gray-700"
               >
                 {parseInline(h, `${blockKey}-h${j}`)}
               </th>
@@ -65,9 +65,9 @@ function TableBlock({ lines, blockKey }: { lines: string[]; blockKey: string }) 
         </thead>
         <tbody>
           {rows.map((cells, ri) => (
-            <tr key={ri} className="border-b border-gray-800 last:border-0 hover:bg-gray-800/30 transition-colors">
+            <tr key={ri} className="border-b border-gray-200 dark:border-gray-800 last:border-0 hover:bg-gray-100 dark:hover:bg-gray-800/30 transition-colors">
               {cells.map((cell, ci) => (
-                <td key={ci} className="px-4 py-2.5 text-gray-300 text-sm align-top">
+                <td key={ci} className="px-4 py-2.5 text-gray-600 dark:text-gray-300 text-sm align-top">
                   {parseInline(cell, `${blockKey}-r${ri}c${ci}`)}
                 </td>
               ))}
@@ -106,7 +106,7 @@ export function Markdown({ content, className }: { content: string; className?: 
       i++ // closing ```
       if (codeLines.length > 0) {
         elements.push(
-          <pre key={`code-${key}`} className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 my-3 overflow-x-auto text-xs text-gray-300 font-mono leading-relaxed whitespace-pre-wrap">
+          <pre key={`code-${key}`} className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 my-3 overflow-x-auto text-xs text-gray-600 dark:text-gray-300 font-mono leading-relaxed whitespace-pre-wrap">
             {codeLines.join('\n')}
           </pre>
         )
@@ -122,10 +122,10 @@ export function Markdown({ content, className }: { content: string; className?: 
         i++
       }
       elements.push(
-        <blockquote key={`bq-${key}`} className="border-l-2 border-gray-600 pl-4 my-3 space-y-1">
+        <blockquote key={`bq-${key}`} className="border-l-2 border-gray-400 dark:border-gray-600 pl-4 my-3 space-y-1">
           {items.map((text, idx) =>
             text
-              ? <p key={idx} className="text-gray-400 text-sm italic leading-relaxed">{parseInline(text, `bq-${key}-${idx}`)}</p>
+              ? <p key={idx} className="text-gray-500 dark:text-gray-400 text-sm italic leading-relaxed">{parseInline(text, `bq-${key}-${idx}`)}</p>
               : null
           )}
         </blockquote>
@@ -159,21 +159,21 @@ export function Markdown({ content, className }: { content: string; className?: 
     // ── Headings ──────────────────────────────────────────────────────────────
     if (line.startsWith('### ')) {
       elements.push(
-        <h3 key={key} className="text-sm font-semibold text-white mt-5 mb-1.5 first:mt-0">
+        <h3 key={key} className="text-sm font-semibold text-gray-900 dark:text-white mt-5 mb-1.5 first:mt-0">
           {parseInline(line.slice(4), key)}
         </h3>
       )
       i++
     } else if (line.startsWith('## ')) {
       elements.push(
-        <h2 key={key} className="text-base font-semibold text-white mt-6 mb-2 first:mt-0 border-b border-gray-700 pb-1">
+        <h2 key={key} className="text-base font-semibold text-gray-900 dark:text-white mt-6 mb-2 first:mt-0 border-b border-gray-300 dark:border-gray-700 pb-1">
           {parseInline(line.slice(3), key)}
         </h2>
       )
       i++
     } else if (line.startsWith('# ')) {
       elements.push(
-        <h1 key={key} className="text-lg font-bold text-white mt-6 mb-2 first:mt-0">
+        <h1 key={key} className="text-lg font-bold text-gray-900 dark:text-white mt-6 mb-2 first:mt-0">
           {parseInline(line.slice(2), key)}
         </h1>
       )
@@ -181,7 +181,7 @@ export function Markdown({ content, className }: { content: string; className?: 
 
     // ── Horizontal rule ───────────────────────────────────────────────────────
     } else if (/^-{3,}$/.test(line.trim())) {
-      elements.push(<hr key={key} className="border-gray-700 my-4" />)
+      elements.push(<hr key={key} className="border-gray-300 dark:border-gray-700 my-4" />)
       i++
 
     // ── Unordered list ────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ export function Markdown({ content, className }: { content: string; className?: 
       while (i < lines.length) {
         if (isUL(lines[i])) {
           items.push(
-            <li key={i} className="text-gray-300 text-sm leading-relaxed">
+            <li key={i} className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed">
               {parseInline(lines[i].slice(2), `${i}`)}
             </li>
           )
@@ -215,7 +215,7 @@ export function Markdown({ content, className }: { content: string; className?: 
       while (i < lines.length) {
         if (isOL(lines[i])) {
           items.push(
-            <li key={i} className="text-gray-300 text-sm leading-relaxed">
+            <li key={i} className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed">
               {parseInline(lines[i].replace(/^\d+\. /, ''), `${i}`)}
             </li>
           )
@@ -239,7 +239,7 @@ export function Markdown({ content, className }: { content: string; className?: 
     // ── Paragraph ─────────────────────────────────────────────────────────────
     } else {
       elements.push(
-        <p key={key} className="text-gray-300 text-sm leading-relaxed mb-2">
+        <p key={key} className="text-gray-600 dark:text-gray-300 text-sm leading-relaxed mb-2.5">
           {parseInline(line, key)}
         </p>
       )
@@ -247,5 +247,5 @@ export function Markdown({ content, className }: { content: string; className?: 
     }
   }
 
-  return <div className={`space-y-0.5 ${className ?? ''}`}>{elements}</div>
+  return <div className={`space-y-1 ${className ?? ''}`}>{elements}</div>
 }

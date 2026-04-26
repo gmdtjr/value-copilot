@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Settings, BookOpen, ExternalLink } from 'lucide-react'
 import { api } from '../api'
+import { ThemeControls } from '../components/ThemeControls'
 import type { Ticker, Market } from '../types'
 
 function PipelineRow({ label, value, tag, tagLabel }: {
@@ -11,17 +12,17 @@ function PipelineRow({ label, value, tag, tagLabel }: {
   tagLabel?: string
 }) {
   const tagStyle = tag === 'ok'
-    ? 'bg-emerald-900/60 text-emerald-400'
+    ? 'bg-emerald-900/60 text-emerald-600 dark:text-emerald-400'
     : tag === 'warn'
-    ? 'bg-amber-900/60 text-amber-400'
+    ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/60 dark:text-amber-400'
     : tag === 'error'
-    ? 'bg-red-900/60 text-red-400'
+    ? 'bg-red-100 text-red-600 dark:bg-red-900/60 dark:text-red-400'
     : ''
   return (
-    <div className="bg-gray-800/30 px-4 py-2.5 flex items-start justify-between gap-3">
-      <span className="text-xs text-gray-400 flex-shrink-0 w-36">{label}</span>
+    <div className="bg-gray-100 dark:bg-gray-800/30 px-4 py-2.5 flex items-start justify-between gap-3">
+      <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 w-36">{label}</span>
       <div className="flex-1 flex items-start justify-between gap-2 min-w-0">
-        {value && <span className="text-xs text-gray-300 leading-relaxed">{value}</span>}
+        {value && <span className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">{value}</span>}
         {tag && tagLabel && (
           <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${tagStyle}`}>
             {tagLabel}
@@ -33,9 +34,9 @@ function PipelineRow({ label, value, tag, tagLabel }: {
 }
 
 const STATUS_BADGE: Record<string, string> = {
-  draft: 'bg-yellow-900 text-yellow-200',
-  confirmed: 'bg-green-900 text-green-200',
-  needs_review: 'bg-red-900 text-red-200',
+  draft: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-200',
+  confirmed: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200',
+  needs_review: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200',
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -277,10 +278,10 @@ export default function Dashboard() {
     error: '오류',
   }
   const JOB_COLOR: Record<JobStatus, string> = {
-    waiting: 'text-gray-400',
-    running: 'text-blue-400',
-    done: 'text-emerald-400',
-    error: 'text-red-400',
+    waiting: 'text-gray-500 dark:text-gray-400',
+    running: 'text-blue-600 dark:text-blue-400',
+    done: 'text-emerald-600 dark:text-emerald-400',
+    error: 'text-red-600 dark:text-red-400',
   }
   const ACTION_LABEL: Record<BulkAction, string> = {
     refresh: '데이터 수집',
@@ -293,32 +294,33 @@ export default function Dashboard() {
   const bulkInProgress = Object.values(jobStatuses).some(j => j.status === 'running' || j.status === 'waiting')
 
   return (
-    <div className="min-h-screen bg-gray-950">
+    <div className="min-h-screen bg-white dark:bg-gray-950">
       {/* Header */}
-      <header className="border-b border-gray-800 px-3 py-3 sm:px-6 sm:py-4 flex items-center justify-between gap-2">
+      <header className="border-b border-gray-200 dark:border-gray-800 px-3 py-3 sm:px-6 sm:py-4 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-          <TrendingUp className="text-emerald-400" size={22} />
-          <h1 className="text-base sm:text-xl font-bold text-white">Value Copilot</h1>
-          <span className="hidden sm:block text-xs text-gray-500 ml-2">가치투자 AI 코파일럿</span>
+          <TrendingUp className="text-emerald-600 dark:text-emerald-400" size={22} />
+          <h1 className="text-base sm:text-xl font-bold text-gray-900 dark:text-white">Value Copilot</h1>
+          <span className="hidden sm:block text-xs text-gray-400 dark:text-gray-500 ml-2">가치투자 AI 코파일럿</span>
         </div>
         <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
+          <ThemeControls />
           <button
             onClick={() => setShowSettings(true)}
-            className="text-gray-400 hover:text-white p-1.5 sm:p-2 rounded-lg transition-colors"
+            className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white p-1.5 sm:p-2 rounded-lg transition-colors"
             title="설정"
           >
             <Settings size={16} />
           </button>
           <button
             onClick={() => navigate('/reports')}
-            className="flex items-center gap-1.5 text-gray-400 hover:text-white text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
           >
             <FileText size={15} />
             보고서
           </button>
           <button
             onClick={() => navigate('/journal')}
-            className="flex items-center gap-1.5 text-gray-400 hover:text-white text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
           >
             <BookOpen size={15} />
             일지
@@ -331,7 +333,7 @@ export default function Dashboard() {
             className={`flex items-center gap-1.5 text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors ${
               selectMode
                 ? 'bg-violet-700 text-white hover:bg-violet-600'
-                : 'text-gray-400 hover:text-white'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
             }`}
           >
             <span className="hidden sm:inline">{selectMode ? '✕ 선택 종료' : '☑ 종목 선택'}</span>
@@ -340,7 +342,7 @@ export default function Dashboard() {
           <button
             onClick={handleSync}
             disabled={syncing}
-            className="flex items-center gap-1.5 text-gray-400 hover:text-white disabled:opacity-50 text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white disabled:opacity-50 text-xs sm:text-sm font-medium px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
           >
             <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
             <span className="hidden sm:inline">KIS 동기화</span>
@@ -359,14 +361,14 @@ export default function Dashboard() {
 
       {/* Bulk Action Bar */}
       {selectMode && (
-        <div className="border-b border-gray-800 bg-gray-900 px-3 sm:px-6 py-2 flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-gray-400 mr-1">
+        <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 px-3 sm:px-6 py-2 flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-gray-500 dark:text-gray-400 mr-1">
             {selectedIds.size > 0 ? `${selectedIds.size}개 선택됨` : '종목을 선택하세요'}
           </span>
           {selectedIds.size < tickers.length && (
             <button
               onClick={selectAll}
-              className="text-xs text-gray-500 hover:text-gray-300 underline"
+              className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 underline"
             >
               전체 선택
             </button>
@@ -377,7 +379,7 @@ export default function Dashboard() {
               <button
                 onClick={() => runBulkAction('refresh')}
                 disabled={bulkRunning || bulkInProgress}
-                className="flex items-center gap-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 bg-gray-200 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-900 dark:text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
                 데이터 수집
               </button>
@@ -392,7 +394,7 @@ export default function Dashboard() {
               <button
                 onClick={() => runBulkAction('valley')}
                 disabled={bulkRunning || bulkInProgress}
-                className="flex items-center gap-1.5 bg-sky-700 hover:bg-sky-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 bg-sky-700 hover:bg-sky-600 disabled:opacity-50 text-gray-900 dark:text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
                 <ExternalLink size={13} />
                 Valley 링크 찾기
@@ -400,7 +402,7 @@ export default function Dashboard() {
               <button
                 onClick={() => setSelectedIds(new Set())}
                 disabled={bulkRunning}
-                className="text-gray-500 hover:text-gray-300 disabled:opacity-50 p-1.5 rounded-lg transition-colors"
+                className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 disabled:opacity-50 p-1.5 rounded-lg transition-colors"
                 title="선택 해제"
               >
                 <X size={14} />
@@ -414,53 +416,53 @@ export default function Dashboard() {
         {/* Add ticker modal */}
         {showForm && (
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-            <div className="bg-gray-900 border border-gray-700 rounded-xl p-4 sm:p-6 w-full max-w-md mx-3">
-              <h2 className="text-lg font-semibold text-white mb-4">종목 추가</h2>
+            <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl p-4 sm:p-6 w-full max-w-md mx-3">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">종목 추가</h2>
               <form onSubmit={handleAdd} className="space-y-4">
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">심볼</label>
+                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">심볼</label>
                   <input
                     value={form.symbol}
                     onChange={(e) => setForm({ ...form, symbol: e.target.value.toUpperCase() })}
                     placeholder="NVDA"
-                    className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:border-emerald-500"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">회사명</label>
+                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">회사명</label>
                   <input
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
                     placeholder="NVIDIA Corporation"
-                    className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:border-emerald-500"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">시장</label>
+                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">시장</label>
                   <select
                     value={form.market}
                     onChange={(e) => setForm({ ...form, market: e.target.value as Market })}
-                    className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:border-emerald-500"
                   >
                     <option value="US_Stock">US Stock</option>
                     <option value="KR_Stock">KR Stock</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">구분</label>
+                  <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">구분</label>
                   <select
                     value={form.status}
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
-                    className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-gray-900 dark:text-white text-sm focus:outline-none focus:border-emerald-500"
                   >
                     <option value="watchlist">관심 종목</option>
                     <option value="portfolio">포트폴리오</option>
                   </select>
                 </div>
                 {addError && (
-                  <p className="text-red-400 text-sm flex items-center gap-1">
+                  <p className="text-red-600 dark:text-red-400 text-sm flex items-center gap-1">
                     <AlertCircle size={14} /> {addError}
                   </p>
                 )}
@@ -468,7 +470,7 @@ export default function Dashboard() {
                   <button
                     type="button"
                     onClick={() => { setShowForm(false); setAddError('') }}
-                    className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium py-2 rounded-lg transition-colors"
+                    className="flex-1 bg-gray-200 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-sm font-medium py-2 rounded-lg transition-colors"
                   >
                     취소
                   </button>
@@ -488,14 +490,14 @@ export default function Dashboard() {
         {/* Settings modal */}
         {showSettings && (
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-3">
-            <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
               {/* Header */}
-              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 sticky top-0 bg-gray-900 z-10">
-                <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                  <Settings size={16} className="text-gray-400" />
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-800 sticky top-0 bg-gray-50 dark:bg-gray-900 z-10">
+                <h2 className="text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                  <Settings size={16} className="text-gray-500 dark:text-gray-400" />
                   시스템 파이프라인
                 </h2>
-                <button onClick={() => setShowSettings(false)} className="text-gray-500 hover:text-gray-300 p-1 rounded">
+                <button onClick={() => setShowSettings(false)} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded">
                   <X size={16} />
                 </button>
               </div>
@@ -504,14 +506,14 @@ export default function Dashboard() {
 
                 {/* US 주식 */}
                 <section>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🇺🇸 US 주식</p>
-                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">🇺🇸 US 주식</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
 
                     {/* 재무 데이터 — 선택 가능 */}
-                    <div className="bg-gray-800/50 px-4 py-3">
+                    <div className="bg-gray-200 dark:bg-gray-800/50 px-4 py-3">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-400">재무 데이터</span>
-                        {savingSettings && <span className="text-xs text-gray-500">저장 중...</span>}
+                        <span className="text-xs text-gray-500 dark:text-gray-400">재무 데이터</span>
+                        {savingSettings && <span className="text-xs text-gray-400 dark:text-gray-500">저장 중...</span>}
                       </div>
                       <div className="flex gap-2">
                         {[
@@ -523,7 +525,7 @@ export default function Dashboard() {
                             className={`flex-1 flex items-start gap-2 p-2.5 rounded-lg border cursor-pointer transition-colors text-xs ${
                               settings.us_data_source === opt.value
                                 ? 'border-emerald-600 bg-emerald-950/40'
-                                : 'border-gray-700 hover:border-gray-600'
+                                : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600'
                             }`}
                           >
                             <input
@@ -536,14 +538,14 @@ export default function Dashboard() {
                               className="mt-0.5 accent-emerald-500 flex-shrink-0"
                             />
                             <div>
-                              <p className="text-white font-medium">{opt.label}</p>
-                              <p className="text-gray-500 mt-0.5">{opt.desc}</p>
+                              <p className="text-gray-900 dark:text-white font-medium">{opt.label}</p>
+                              <p className="text-gray-400 dark:text-gray-500 mt-0.5">{opt.desc}</p>
                             </div>
                           </label>
                         ))}
                       </div>
                       {settings.us_data_source === 'financialdatasets' && (
-                        <p className={`text-xs mt-2 ${sysInfo.has_financial_datasets_key ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        <p className={`text-xs mt-2 ${sysInfo.has_financial_datasets_key ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
                           {sysInfo.has_financial_datasets_key
                             ? '✓ FINANCIAL_DATASETS_API_KEY 설정됨 · 한도 초과 시 yfinance로 자동 전환'
                             : '⚠ FINANCIAL_DATASETS_API_KEY 미설정 · yfinance로 자동 전환됩니다'}
@@ -558,8 +560,8 @@ export default function Dashboard() {
 
                 {/* KR 주식 */}
                 <section>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🇰🇷 KR 주식</p>
-                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">🇰🇷 KR 주식</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
                     <PipelineRow
                       label="재무제표"
                       value="OpenDART fnlttSinglAcntAll (IS/BS/CF 단일 호출, CFS 우선)"
@@ -591,8 +593,8 @@ export default function Dashboard() {
 
                 {/* KIS */}
                 <section>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">💼 포트폴리오</p>
-                  <div className="rounded-lg overflow-hidden border border-gray-800">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">💼 포트폴리오</p>
+                  <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
                     <PipelineRow
                       label="KIS 동기화"
                       value="한국투자증권 API — 5개 계좌 잔고 조회"
@@ -604,12 +606,12 @@ export default function Dashboard() {
 
                 {/* AI 모델 */}
                 <section>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">🤖 AI 모델</p>
-                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
-                    <div className="flex items-center justify-between px-3 py-2.5 bg-gray-900">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">🤖 AI 모델</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
+                    <div className="flex items-center justify-between px-3 py-2.5 bg-gray-50 dark:bg-gray-900">
                       <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <span className="text-sm text-gray-300 flex-shrink-0">Anthropic API</span>
-                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${sysInfo.has_anthropic_key ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
+                        <span className="text-sm text-gray-600 dark:text-gray-300 flex-shrink-0">Anthropic API</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${sysInfo.has_anthropic_key ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'}`}>
                           {sysInfo.has_anthropic_key ? 'API 키 설정됨' : 'ANTHROPIC_API_KEY 미설정'}
                         </span>
                       </div>
@@ -617,7 +619,7 @@ export default function Dashboard() {
                         href="https://console.anthropic.com/settings/billing"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex-shrink-0 text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors ml-2"
+                        className="flex-shrink-0 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-300 underline underline-offset-2 transition-colors ml-2"
                       >
                         잔액 확인 →
                       </a>
@@ -631,8 +633,8 @@ export default function Dashboard() {
 
                 {/* 스케줄러 */}
                 <section>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">⏰ 자동 스케줄</p>
-                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-800">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">⏰ 자동 스케줄</p>
+                  <div className="space-y-px rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800">
                     <PipelineRow label="06:00 KST" value="light_refresh — news / metrics / insider_trades + 포트폴리오 현재가/일간등락 갱신" />
                     <PipelineRow label="07:00 KST" value="daily_briefing — 뉴스 + 포트폴리오 + 매크로 브리핑" />
                     <PipelineRow label="08:00 KST" value="break_monitor — confirmed 종목 thesis 이탈 감지" />
@@ -670,16 +672,16 @@ export default function Dashboard() {
                 hint: indicators.fear_greed?.rating ?? '',
               },
             ].map((item) => (
-              <div key={item.label} className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3">
-                <p className="text-xs text-gray-500 mb-1">{item.label}</p>
-                <p className="text-white font-semibold text-lg">{item.value}</p>
+              <div key={item.label} className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3">
+                <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">{item.label}</p>
+                <p className="text-gray-900 dark:text-white font-semibold text-lg">{item.value}</p>
                 <div className="flex items-center gap-2 mt-0.5">
                   {item.pct !== undefined && (
-                    <span className={`text-xs font-medium ${item.pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    <span className={`text-xs font-medium ${item.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                       {item.pct >= 0 ? '+' : ''}{item.pct}%
                     </span>
                   )}
-                  {item.hint && <span className="text-xs text-gray-500">{item.hint}</span>}
+                  {item.hint && <span className="text-xs text-gray-400 dark:text-gray-500">{item.hint}</span>}
                 </div>
               </div>
             ))}
@@ -687,33 +689,33 @@ export default function Dashboard() {
         )}
 
         {syncMsg && (
-          <div className="mb-4 bg-blue-900/30 border border-blue-800 rounded-lg p-3 text-blue-300 text-sm">
+          <div className="mb-4 bg-blue-900/30 border border-blue-800 rounded-lg p-3 text-blue-700 dark:text-blue-300 text-sm">
             {syncMsg}
           </div>
         )}
 
         {/* Bulk Progress Panel */}
         {showProgress && bulkAction && (
-          <div className="mb-6 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <div className="mb-6 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
               <div className="flex items-center gap-2 flex-wrap">
                 {Object.values(jobStatuses).some(j => j.status === 'running') && (
-                  <RefreshCw size={13} className="animate-spin text-blue-400" />
+                  <RefreshCw size={13} className="animate-spin text-blue-600 dark:text-blue-400" />
                 )}
-                <span className="text-sm font-medium text-white">
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
                   {ACTION_LABEL[bulkAction]}
                 </span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-gray-400 dark:text-gray-500">
                   ({Object.values(jobStatuses).filter(j => j.status === 'done').length}/{jobTickerIds.length} 완료)
                 </span>
                 {Object.values(jobStatuses).some(j => j.status === 'running' || j.status === 'waiting') && (
-                  <span className="text-xs text-gray-500">· 페이지 이동해도 계속 진행됩니다</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">· 페이지 이동해도 계속 진행됩니다</span>
                 )}
               </div>
               {!bulkRunning && (
                 <button
                   onClick={() => { setBulkAction(null); setJobStatuses({}) }}
-                  className="text-gray-500 hover:text-gray-300 p-1 rounded"
+                  className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 p-1 rounded"
                 >
                   <X size={14} />
                 </button>
@@ -726,16 +728,16 @@ export default function Dashboard() {
                 return (
                   <div key={id} className="flex items-center justify-between px-4 py-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-white font-medium">{ticker?.symbol ?? id}</span>
-                      <span className="text-xs text-gray-500">{ticker?.name}</span>
+                      <span className="text-sm text-gray-900 dark:text-white font-medium">{ticker?.symbol ?? id}</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">{ticker?.name}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      {job.status === 'running' && <RefreshCw size={11} className="animate-spin text-blue-400" />}
+                      {job.status === 'running' && <RefreshCw size={11} className="animate-spin text-blue-600 dark:text-blue-400" />}
                       <span className={`text-xs font-medium ${JOB_COLOR[job.status]}`}>
                         {JOB_LABEL[job.status]}
                       </span>
                       {job.msg && job.status === 'error' && (
-                        <span className="text-xs text-red-400 ml-1 truncate max-w-32" title={job.msg}>
+                        <span className="text-xs text-red-600 dark:text-red-400 ml-1 truncate max-w-32" title={job.msg}>
                           {job.msg}
                         </span>
                       )}
@@ -749,17 +751,17 @@ export default function Dashboard() {
 
         {/* Content */}
         {loading && (
-          <p className="text-gray-500 text-center py-16">불러오는 중...</p>
+          <p className="text-gray-400 dark:text-gray-500 text-center py-16">불러오는 중...</p>
         )}
         {error && (
-          <div className="bg-red-900/30 border border-red-800 rounded-lg p-4 text-red-300 text-sm">
+          <div className="bg-red-900/30 border border-red-800 rounded-lg p-4 text-red-700 dark:text-red-300 text-sm">
             <AlertCircle size={16} className="inline mr-2" />
             {error}
           </div>
         )}
 
         {!loading && !error && tickers.length === 0 && (
-          <div className="text-center py-24 text-gray-500">
+          <div className="text-center py-24 text-gray-400 dark:text-gray-500">
             <TrendingUp size={48} className="mx-auto mb-4 text-gray-700" />
             <p className="text-lg">종목이 없습니다.</p>
             <p className="text-sm mt-1">오른쪽 위 "추가" 버튼을 눌러 시작하세요.</p>
@@ -796,12 +798,12 @@ export default function Dashboard() {
             const isSelected = selectedIds.has(ticker.id)
             return (
               <div
-                className={`bg-gray-900 border rounded-xl px-5 py-4 transition-colors ${
+                className={`bg-gray-50 dark:bg-gray-900 border rounded-xl px-5 py-4 transition-colors ${
                   selectMode
                     ? isSelected
                       ? 'border-violet-500 cursor-pointer hover:border-violet-400'
-                      : 'border-gray-800 cursor-pointer hover:border-gray-600'
-                    : 'border-gray-800 hover:border-gray-700'
+                      : 'border-gray-200 dark:border-gray-800 cursor-pointer hover:border-gray-400 dark:hover:border-gray-600'
+                    : 'border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700'
                 }`}
                 onClick={selectMode ? () => toggleSelect(ticker.id) : undefined}
               >
@@ -809,29 +811,29 @@ export default function Dashboard() {
                   <div className="flex items-center gap-3 min-w-0">
                     {selectMode && (
                       <div className={`flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center text-xs font-bold ${
-                        isSelected ? 'bg-violet-500 border-violet-500 text-white' : 'border-gray-600'
+                        isSelected ? 'bg-violet-500 border-violet-500 text-white' : 'border-gray-400 dark:border-gray-600'
                       }`}>
                         {isSelected && '✓'}
                       </div>
                     )}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-white font-semibold truncate">{ticker.name}</span>
+                        <span className="text-gray-900 dark:text-white font-semibold truncate">{ticker.name}</span>
                         {p && ticker.portfolio_current_price != null && (
-                          <span className="text-sm font-medium text-white">
+                          <span className="text-sm font-medium text-gray-900 dark:text-white">
                             {ticker.portfolio_current_price.toLocaleString()}
                           </span>
                         )}
                         {p && dailyPct != null && (
-                          <span className={`text-xs font-medium ${dailyPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          <span className={`text-xs font-medium ${dailyPct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                             {dailyPct >= 0 ? '+' : ''}{dailyPct.toFixed(2)}%
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="text-xs text-gray-500 font-mono">{ticker.symbol}</span>
-                        <span className="text-xs text-gray-600">·</span>
-                        <span className="text-xs text-gray-500">{ticker.market === 'US_Stock' ? 'US' : 'KR'}</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{ticker.symbol}</span>
+                        <span className="text-xs text-gray-500 dark:text-gray-600">·</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500">{ticker.market === 'US_Stock' ? 'US' : 'KR'}</span>
                       </div>
                     </div>
                   </div>
@@ -840,10 +842,10 @@ export default function Dashboard() {
                     {/* 포트폴리오 수익률 */}
                     {p && ticker.portfolio_avg_price != null && (
                       <div className="text-right hidden sm:block">
-                        <p className={`text-sm font-medium ${pnlPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        <p className={`text-sm font-medium ${pnlPct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                           {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
                         </p>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-gray-400 dark:text-gray-500">
                           평균 {ticker.portfolio_avg_price.toLocaleString()}
                           {ticker.portfolio_quantity != null && ` · ${ticker.portfolio_quantity}주`}
                         </p>
@@ -855,7 +857,7 @@ export default function Dashboard() {
                         {STATUS_LABEL[ticker.thesis_status] ?? ticker.thesis_status}
                       </span>
                     ) : (
-                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-800 text-gray-500">
+                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500">
                         미분석
                       </span>
                     )}
@@ -863,7 +865,7 @@ export default function Dashboard() {
                       <button
                         onClick={() => toggleDailyAlert(ticker)}
                         title={ticker.daily_alert ? 'Break Monitor 비활성화' : 'Break Monitor 활성화'}
-                        className={`transition-colors ${ticker.daily_alert ? 'text-amber-400 hover:text-amber-300' : 'text-gray-600 hover:text-gray-400'}`}
+                        className={`transition-colors ${ticker.daily_alert ? 'text-amber-600 dark:text-amber-400 hover:text-amber-300' : 'text-gray-500 dark:text-gray-600 hover:text-gray-400'}`}
                       >
                         {ticker.daily_alert ? <Bell size={15} /> : <BellOff size={15} />}
                       </button>
@@ -876,7 +878,7 @@ export default function Dashboard() {
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                            className="flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-300 transition-colors"
                             title="Valley AI에서 보기"
                           >
                             <ExternalLink size={15} />
@@ -893,7 +895,7 @@ export default function Dashboard() {
                         )}
                         <button
                           onClick={() => navigate(`/tickers/${ticker.id}/thesis`)}
-                          className="flex items-center gap-1.5 text-sm text-emerald-400 hover:text-emerald-300 transition-colors"
+                          className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 hover:text-emerald-300 transition-colors"
                         >
                           <Eye size={15} />
                           Thesis
@@ -910,7 +912,7 @@ export default function Dashboard() {
             <div className="space-y-6">
               {portfolio.length > 0 && (
                 <div>
-                  <h2 className="text-xs text-gray-500 font-medium uppercase tracking-wider mb-3">
+                  <h2 className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase tracking-wider mb-3">
                     포트폴리오 ({portfolio.length})
                   </h2>
                   <div className="space-y-2">
@@ -920,7 +922,7 @@ export default function Dashboard() {
               )}
               {watchlist.length > 0 && (
                 <div>
-                  <h2 className="text-xs text-gray-500 font-medium uppercase tracking-wider mb-3">
+                  <h2 className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase tracking-wider mb-3">
                     관심 종목 ({watchlist.length})
                   </h2>
                   <div className="space-y-2">

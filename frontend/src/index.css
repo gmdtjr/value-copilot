@@ -3,5 +3,14 @@
 @tailwind utilities;
 
 body {
-  @apply bg-gray-950 text-gray-100 antialiased;
+  @apply bg-white text-gray-900 antialiased;
 }
+
+html.dark body {
+  @apply bg-gray-950 text-gray-100;
+}
+
+/* Font size variants for report content — cascade into Markdown elements */
+.fs-sm p, .fs-sm li, .fs-sm td, .fs-sm th { font-size: 0.8rem; line-height: 1.6; }
+.fs-md p, .fs-md li, .fs-md td, .fs-md th { font-size: 0.875rem; line-height: 1.625; }
+.fs-lg p, .fs-lg li, .fs-lg td, .fs-lg th { font-size: 1rem; line-height: 1.7; }
