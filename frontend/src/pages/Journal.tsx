@@ -397,7 +397,7 @@ export default function JournalPage() {
             <button
               onClick={() => setTab('trade')}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                tab === 'trade' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                tab === 'trade' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               <BookOpen size={12} />
@@ -406,7 +406,7 @@ export default function JournalPage() {
             <button
               onClick={() => setTab('idea')}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
-                tab === 'idea' ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                tab === 'idea' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
               }`}
             >
               <Lightbulb size={12} />

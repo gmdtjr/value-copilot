@@ -80,11 +80,15 @@ value-copilot/
     ├── Dockerfile.prod             # 프로덕션 빌드 (node → nginx 멀티스테이지)
     ├── nginx.conf                  # SPA 라우팅 + /api/ 프록시 + SSE 지원
     │                               # proxy_buffering off, proxy_read_timeout 300s
+    ├── tailwind.config.js          # darkMode: 'class' (라이트/다크 토글)
     └── src/
+        ├── contexts/
+        │   └── ThemeContext.tsx    # 테마(dark/light) + 글자크기(sm/md/lg) 상태 — localStorage 영속화
         ├── components/
-        │   └── Markdown.tsx        # 커스텀 마크다운 렌더러
-        │                           # 지원: h1~h3, bold/italic/code, 표, 목록, blockquote, 코드블록, hr
-        │                           # <section> XML 태그 자동 strip
+        │   ├── Markdown.tsx        # 커스텀 마크다운 렌더러
+        │   │                       # 지원: h1~h3, bold/italic/code, 표, 목록, blockquote, 코드블록, hr
+        │   │                       # <section> XML 태그 자동 strip. dark: 클래스 완전 지원
+        │   └── ThemeControls.tsx   # 헤더 공용 — A/A/A 글자크기 버튼 + ☀/🌙 테마 토글
         ├── pages/
         │   ├── Dashboard.tsx       # 포트폴리오/관심 섹션 + bulk 작업 + 설정 모달
         │   │                       # 종목 카드: 종목명 크게, 심볼·시장 작게 표시
@@ -93,9 +97,12 @@ value-copilot/
         │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 + 보고서탭
         │   │                       # AI 분석 버튼 → 모달(stock_type 선택 + seed_memo 입력)
         │   │                       # 종목명 헤더 크게, 심볼·시장 작게 표시
+        │   │                       # main 영역에 fs-${fontSize} 적용 (글자크기 조절 반영)
         │   ├── Reports.tsx         # 보고서 히스토리 + 읽음관리 + 코멘트 + 종류 필터 + 복수삭제
         │   │                       # 종목 탐색: 렌즈 선택 드롭다운 + 아이디어 입력
         │   │                       # 보고서 목록: 종목명 크게, 심볼 회색 작게
+        │   │                       # 사이드바 접기/펼치기 (PanelLeft 토글, lg+ only)
+        │   │                       # 컨테이너 max-w-[1400px]. 보고서 본문에 fs-${fontSize} 적용
         │   └── Journal.tsx         # 거래일지 탭 (KIS 동기화 거래 + 메모) + 아이디어 탭 (자유 메모)
         ├── api.ts
         └── types.ts
@@ -363,9 +370,11 @@ Rate limit 보호:
 ## 기술 스택
 
 ```
-Frontend   React 18 + TypeScript + Vite + Tailwind CSS
+Frontend   React 18 + TypeScript + Vite + Tailwind CSS (darkMode: 'class')
            SSE (fetch + ReadableStream) — POST 지원 위해 EventSource 대신 사용
            react-router-dom: /, /tickers/:id/thesis, /reports, /journal
+           ThemeContext: 라이트/다크 + 글자크기(sm/md/lg) — localStorage 영속화
+           ThemeControls: 모든 페이지 헤더 공용 컴포넌트
 
 Backend    Python 3.11 + FastAPI + SSE
            APScheduler (06:00 / 07:00 / 08:00 KST 3개 job)
@@ -551,6 +560,16 @@ docker compose up -d --build  # 의존성 변경 후
   - Dashboard: `종목명 (크게) / 심볼 · US|KR (작게)`
   - Reports: `종목명 심볼(회색)` 형식
 - **KR 종목**: 심볼이 6자리 숫자라 종목명 우선 표시 특히 중요
+- **라이트/다크 모드**: Tailwind `dark:` 클래스 전체 적용. `<html class="dark">` 토글로 전환
+  - 기본값: 다크 모드 (localStorage 'theme' 키로 영속화)
+  - 컬러 버튼(bg-blue-700 등): 라이트 모드에서도 white text 유지 — 배경이 충분히 어두움
+  - 배지(bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-200): 라이트/다크 각각 별도 정의
+- **글자 크기 조절**: `fs-sm / fs-md / fs-lg` CSS 클래스로 보고서·thesis 본문 폰트 크기 제어
+  - `index.css`에 `p, li, td, th` 선택자로 정의 (0.8 / 0.875 / 1.0 rem)
+  - localStorage 'fontSize' 키로 영속화. Reports.tsx와 Thesis.tsx main에 적용
+- **Reports 사이드바**: 데스크탑(lg+)에서 `sidebarCollapsed` 상태로 접기/펼치기
+  - 접힌 상태: `lg:w-0 overflow-hidden` + 보고서 본문이 전체 너비 사용
+  - 컨테이너: `max-w-[1400px]` (이전 `max-w-5xl` 1024px에서 확장)
 
 ### 인프라
 - **SSE 헤더**: `Cache-Control: no-cache`, `X-Accel-Buffering: no` 모든 SSE 응답에 명시. reports.py의 discovery/portfolio-review 포함
