@@ -481,7 +481,7 @@ def generate_ticker_report(
 **Valuation**: {valuation or '(없음)'}
 """
 
-    user_message = f"""다음 종목에 대해 월가 수준의 심층 분석 보고서를 작성해 주세요.
+    user_message = f"""다음 종목에 대해 심층 분석 보고서를 작성해 주세요.
 
 ## 종목 정보
 - 심볼: {symbol}
@@ -489,7 +489,7 @@ def generate_ticker_report(
 - 시장: {market}
 {fin['company_info']}
 
-## 실제 재무 데이터
+## 재무 데이터 (분석 참고용 — 수치 재인용 최소화)
 
 ### Income Statement (연간, 최근 5년)
 {fin['income_table']}
@@ -503,20 +503,24 @@ def generate_ticker_report(
 ### Key Metrics (TTM)
 {fin['key_metrics']}
 
-### Insider Trades (최근 20건) — 경영진 매수/매도 신호
+### Insider Trades (최근 10건) — 경영진 매수/매도 신호
 {fin['insider_trades']}
 
-### 최근 뉴스 (최근 10건)
+### 최근 뉴스 (최근 8건)
 {fin['news']}
 {("### " + ("DART 공시 요약 (사업보고서/반기보고서)" if market == "KR_Stock" else "SEC 공시 원문 요약 (10-K/10-Q)") + chr(10) + sec_context) if sec_context else ""}
 {thesis_context}
 ---
 
-위 실제 데이터를 기반으로 8개 섹션을 XML 태그로 감싸서 출력해 주세요.
-각 섹션은 최소 400자 이상, 제공된 실제 수치를 반드시 인용하세요.
-Insider Trades 데이터는 management_track_record 섹션에서 반드시 분석하세요.
-SEC 공시 요약이 있으면 business_overview, risk_matrix 섹션에서 반드시 인용하세요.
-데이터가 없는 항목은 "데이터 미확인"으로 명시하고 정성적 분석으로 대체하세요.
+위 데이터를 분석하여 8개 섹션을 XML 태그로 감싸서 출력해 주세요.
+
+**작성 지침**:
+- 재무 수치를 그대로 나열하지 말 것. 수치가 말하는 방향성·추세·의미를 서술할 것.
+- 꼭 필요한 경우에만 대표 수치 1~2개 인용 — 나머지는 "개선", "둔화", "안정적" 등 방향 표현 사용.
+- Insider Trades는 management_track_record에서 주목할 패턴 위주로 해석.
+- SEC/DART 공시가 있으면 recent_developments와 risk_matrix에서 핵심 내용 반영.
+- 데이터가 없는 항목은 "데이터 미확인" 표기 후 정성적 분석으로 대체.
+- bull_bear_synthesis는 반드시 포함할 것.
 """
 
     # ── 5. Claude 호출 ────────────────────────────────────────────────────────

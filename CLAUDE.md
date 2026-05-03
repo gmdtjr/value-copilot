@@ -36,10 +36,11 @@ value-copilot/
 │   │   └── db.py                   # ORM 모델 + Enum 정의
 │   ├── routes/
 │   │   ├── tickers.py              # 종목 CRUD + analyze/refine/refresh-data/report/bulk-*
+│   │   │                           # + DELETE /{id} (cascade) + POST /{id}/resolve-valley (단건)
 │   │   ├── thesis.py               # Thesis CRUD + confirm
 │   │   ├── reports.py              # 보고서 관리 + 트리거 + discovery + portfolio-review
 │   │   ├── portfolio.py            # KIS 동기화 트리거 + 거래 감지
-│   │   ├── tradelog.py             # 투자 일지 CRUD (GET/PATCH note/DELETE)
+│   │   ├── tradelog.py             # 투자 일지 CRUD (POST 수동생성/GET/PATCH note/DELETE)
 │   │   ├── ideas.py                # 아이디어 메모 CRUD (GET/POST/PATCH/DELETE)
 │   │   ├── market.py               # 시장 지표 API
 │   │   └── settings.py             # 설정 조회/수정 + system-info
@@ -92,10 +93,12 @@ value-copilot/
         ├── pages/
         │   ├── Dashboard.tsx       # 포트폴리오/관심 섹션 + bulk 작업 + 설정 모달
         │   │                       # 종목 카드: 종목명 크게, 심볼·시장 작게 표시
-        │   │                       # bulk 버튼: 데이터 수집 / 리포트 생성 / Valley 링크 찾기
+        │   │                       # bulk 버튼: 데이터 수집 / 리포트 생성 / Valley 링크 찾기 / 종목 삭제
+        │   │                       # 종목 단건 삭제 (카드 Trash 아이콘 → 확인 모달)
         │   │                       # (bulk Thesis 생성 제거됨 — 관점 입력 필요로 개별 생성)
         │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 + 보고서탭
         │   │                       # AI 분석 버튼 → 모달(stock_type 선택 + seed_memo 입력)
+        │   │                       # 헤더: Valley 링크 버튼(있으면 외부링크, 없으면 단건 조회) + 종목 삭제
         │   │                       # 종목명 헤더 크게, 심볼·시장 작게 표시
         │   │                       # main 영역에 fs-${fontSize} 적용 (글자크기 조절 반영)
         │   ├── Reports.tsx         # 보고서 히스토리 + 읽음관리 + 코멘트 + 종류 필터 + 복수삭제
@@ -103,7 +106,8 @@ value-copilot/
         │   │                       # 보고서 목록: 종목명 크게, 심볼 회색 작게
         │   │                       # 사이드바 접기/펼치기 (PanelLeft 토글, lg+ only)
         │   │                       # 컨테이너 max-w-[1400px]. 보고서 본문에 fs-${fontSize} 적용
-        │   └── Journal.tsx         # 거래일지 탭 (KIS 동기화 거래 + 메모) + 아이디어 탭 (자유 메모)
+        │   └── Journal.tsx         # 거래일지 탭 (KIS 동기화 거래 + 수동 기록 + 메모) + 아이디어 탭
+        │                           # 수동 기록: "수동 기록" 버튼 → ManualTradeComposer 모달 → POST /api/tradelog
         ├── api.ts
         └── types.ts
 ```
@@ -228,7 +232,7 @@ FinancialCache TTL:
   metrics / news / naver_news : 24시간 (매일 06:00 자동 갱신)
   insider_trades              : 3일   (매일 06:00 자동 갱신)
   facts                       : 30일  (수동 갱신)
-  valley_url                  : 30일  (bulk-resolve-valley 수동 실행)
+  valley_url                  : 30일  (bulk-resolve-valley 또는 단건 resolve-valley 수동 실행)
 
 갱신 방식:
   수동 "데이터 갱신" (단일 종목)  → 전체 캐시 삭제 + 재수집 + SEC/DART + 8-K 파이프라인
@@ -299,17 +303,26 @@ Rate limit 보호:
   청산 종목: quantity=0, status=watchlist
   → Telegram notify_trades_detected + /journal 딥링크
 
-[Valley 링크 찾기] (Dashboard bulk 버튼)
-  선택 종목 → bulk-resolve-valley → BackgroundTask
+[Valley 링크 찾기]
+  bulk (Dashboard 멀티셀렉트) → bulk-resolve-valley → BackgroundTask 순차 처리
+  단건 (Thesis 페이지 헤더 "Valley 링크" 버튼) → POST /{id}/resolve-valley → BackgroundTask
   Valley.town 로그인(VALLEY_EMAIL/VALLEY_PASSWORD) → 종목 검색 → URL 후보 검증
   US: stockId suffix 기반 거래소 매핑 → NASD/NYSE/AMEX 순으로 시도
   KR: 6자리 zero-pad → KRX/kospi/kosdaq 순으로 시도 (ETF는 kospi 우선)
   성공 시 FinancialCache(valley_url, 30일) 저장
-  Dashboard 카드에 파란색 Valley 외부링크 표시 (실패 시 amber 비활성)
+  Dashboard 카드: 파란색 Valley 외부링크 표시 (실패 시 amber 비활성)
+  Thesis 헤더: valley_url 있으면 파란색 외부링크, 없으면 조회 버튼 (3초 polling, 최대 60초)
+
+[종목 삭제]
+  단건 (Dashboard 카드 Trash 아이콘 / Thesis 헤더 삭제 버튼) → 확인 모달 → DELETE /api/tickers/{id}
+  bulk (Dashboard 멀티셀렉트 "삭제" 버튼) → 확인 모달 → 순차 DELETE
+  CASCADE: thesis, reports, report_comments, portfolio, financial_cache, sec_filing_summaries 전부 삭제
 
 [투자 일지] (/journal)
   거래일지 탭: TradeLog 목록 (날짜별 그룹, 미작성 강조)
     → 인라인 메모 작성 (note + noted_at 저장)
+    → "수동 기록" 버튼 → ManualTradeComposer 모달 → POST /api/tradelog
+      포트폴리오 종목 선택 시 현재 수량/단가 자동 입력. 거래유형(buy/add/reduce/sell) 선택
   아이디어 탭: IdeaMemo 자유 메모 (상단 작성 폼 + 날짜별 그룹)
     → 종목 태그 선택 가능 (DB 미등록 종목도 허용)
     → 카드 호버 시 수정/삭제 버튼 노출
@@ -448,12 +461,13 @@ Deploy     EC2 (ap-southeast-2, 3.26.145.173) + Docker Compose + nginx
 | special_situation.md | 이벤트 드리븐 | 이벤트 완료 가치, 스프레드, 타임라인 | 이벤트 기대가치 |
 
 ### report-generator/SKILL.md
-- **중립 다관점 분석**: 특정 투자 철학(버핏 등) 편향 없음. 결론 없이 Bull/Bear 논거 병기
-- Buffett refs(01~08) 로드하지 않음 — 프레임워크로 재활용 가능하나 현재 미사용
-- 8섹션: business_overview / **competitive_position** / financial_analysis / **management_track_record** /
+- **중립 다관점 분석**: 특정 투자 철학 편향 없음. 결론 없이 Bull/Bear 논거 병기
+- 8섹션: business_overview / competitive_position / financial_analysis / management_track_record /
   valuation / risk_matrix / recent_developments / **bull_bear_synthesis**
-- 입력: 5년 재무제표 + Metrics TTM + 뉴스 + 인사이더 + SEC 요약(8-K 포함) + thesis(참고용)
-- max_tokens=16000
+- **수치 재인용 최소화**: Valley 등 데이터 플랫폼에서 수치 자체는 확인 가능하므로, 보고서는 방향성·추세·해석 위주로 작성. 꼭 필요한 대표값 1~2개만 인용.
+- **Reverse DCF 중심 밸류에이션**: 3-시나리오 DCF 테이블 대신, "현재 멀티플이 내포하는 성장 기대치"와 그 현실성 판단 중심
+- 입력: 5년 재무제표(분석 참고용) + Metrics TTM + 뉴스 8건 + 인사이더 10건 + SEC/DART 요약 + thesis(참고용)
+- max_tokens=16000. 섹션당 길이 최소화 제약 없음 — 인사이트 밀도 우선
 
 ### break-monitor/SKILL.md
 - confirmed + daily_alert=True 종목만
@@ -583,7 +597,11 @@ docker compose up -d --build  # 의존성 변경 후
 - **ETF 종목 (SHV 등)**: quoteType=ETF 감지 시 재무제표 없음이 정상. totalAssets/NAV/yield/beta 기반 ETF 전용 metrics 표시. EDGAR 파이프라인 미실행. has_data는 current_price 기준으로 판단
 - **KIS daily_pct 버그 수정**: 과거 동기화에서 evlu_pfls_rt(평가손익률)를 daily_pct에 저장한 데이터가 남아 있을 수 있음. `list_tickers`에서 daily_pct와 pnl_pct가 0.05% 이내로 같고 둘 다 50% 초과면 daily_pct=None으로 처리
 - **KIS 동기화 current_price/daily_pct**: KIS API 값 대신 Yahoo Finance quote로 덮어씀. KIS evlu_pfls_rt는 평가손익률이므로 일일 등락률로 사용 불가
-- **Valley 링크**: Dashboard 멀티셀렉트 → "Valley 링크 찾기" 버튼으로 bulk 조회. VALLEY_EMAIL/VALLEY_PASSWORD 환경변수 필수. FinancialCache(valley_url)에 30일 캐시. 조회 성공 시 카드에 파란색 외부링크, 실패 시 amber 비활성 표시
+- **Yahoo quote change_pct 계산**: `regularMarketChangePercent` 우선 사용. 없으면 `(price - prev_close) / prev_close * 100` 계산. prev_close는 `regularMarketPreviousClose` → `chartPreviousClose` 순 fallback
+- **portfolio_sync db.flush()**: upsert 완료 후 flush() 호출 — 거래 감지 쿼리가 동일 트랜잭션 내 최신 Portfolio 상태를 볼 수 있도록 보장
+- **Valley 링크**: bulk(Dashboard 멀티셀렉트) 또는 단건(Thesis 헤더) 조회 가능. VALLEY_EMAIL/VALLEY_PASSWORD 환경변수 필수. FinancialCache(valley_url)에 30일 캐시. 단건 조회 시 프론트에서 3초 간격 polling (최대 60초)
+- **수동 거래 기록**: `POST /api/tradelog` — KIS 동기화 없이 거래를 직접 입력. ticker_id, action, qty_before/after, avg_price_before/after, detected_at(optional), note(optional). Journal 수동 기록 모달에서 사용
+- **종목 삭제**: `DELETE /api/tickers/{id}` — ORM cascade로 thesis/reports/portfolio/financial_cache/sec_filing_summaries 전부 삭제. Thesis 페이지 삭제 후 `/`로 navigate
 - **아이디어 메모**: `/api/ideas` CRUD. ticker_symbol은 DB 종목 FK 없이 자유 텍스트 (대문자). Journal 페이지의 아이디어 탭에서 관리
 - **자동매매 코드 작성 금지**
 - **Thesis confirmed 변경은 반드시 사람의 명시적 액션으로만**

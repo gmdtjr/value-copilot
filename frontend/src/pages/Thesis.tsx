@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Sparkles, CheckCircle, AlertTriangle,
   ChevronDown, ChevronUp, Loader2, FileText, Bell, MessageSquare, RefreshCw,
-  Database, BarChart2, ExternalLink,
+  Database, BarChart2, ExternalLink, Trash2, Link,
 } from 'lucide-react'
 import { api } from '../api'
 import { fmtKST } from '../utils/date'
@@ -471,6 +471,10 @@ export default function ThesisPage() {
   const [monitoring, setMonitoring] = useState(false)
   const [dataStatus, setDataStatus] = useState<DataStatus | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [valleyUrl, setValleyUrl] = useState<string | null>(null)
+  const [resolvingValley, setResolvingValley] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const [feedback, setFeedback] = useState('')
   const [refineState, setRefineState] = useState<RefineState>('idle')
@@ -492,6 +496,7 @@ export default function ThesisPage() {
         setTicker(t)
         setThesis(th)
         setDataStatus(ds)
+        setValleyUrl(t?.valley_url ?? null)
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -613,6 +618,50 @@ export default function ThesisPage() {
     }
   }
 
+  async function handleResolveValley() {
+    if (!id) return
+    setResolvingValley(true)
+    setReportMsg('Valley 링크 조회 중... (10-30초 소요)')
+    try {
+      await api.resolveValley(id)
+      // poll for result
+      let elapsed = 0
+      const poll = setInterval(async () => {
+        elapsed += 3000
+        const list = await api.getTickers().catch(() => null)
+        const updated = list?.find((t) => t.id === id)
+        if (updated?.valley_url) {
+          setValleyUrl(updated.valley_url)
+          setReportMsg('')
+          clearInterval(poll)
+          setResolvingValley(false)
+          return
+        }
+        if (elapsed >= 60000) {
+          clearInterval(poll)
+          setResolvingValley(false)
+          setReportMsg('Valley 링크 조회 실패. Valley 계정 정보(VALLEY_EMAIL/PASSWORD)를 확인하세요.')
+        }
+      }, 3000)
+    } catch (e) {
+      setReportMsg(e instanceof Error ? e.message : 'Valley 조회 실패')
+      setResolvingValley(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!id) return
+    setDeleting(true)
+    try {
+      await api.deleteTicker(id)
+      navigate('/')
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '삭제 실패')
+      setDeleting(false)
+      setShowDeleteConfirm(false)
+    }
+  }
+
   async function handleReport() {
     if (!id) return
     setReporting(true)
@@ -710,6 +759,38 @@ export default function ThesisPage() {
 
           <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
             <ThemeControls />
+            {valleyUrl ? (
+              <a
+                href={valleyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+                title="Valley AI에서 보기"
+              >
+                <ExternalLink size={14} /> Valley
+              </a>
+            ) : (
+              <button
+                onClick={handleResolveValley}
+                disabled={resolvingValley}
+                title="Valley.town 링크 조회"
+                className="flex items-center gap-1.5 bg-gray-200 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-900 dark:text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+              >
+                {resolvingValley
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <Link size={14} />
+                }
+                <span className="hidden sm:inline">Valley 링크</span>
+              </button>
+            )}
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              title="종목 삭제"
+              className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 text-xs sm:text-sm font-medium px-2 py-1.5 rounded-lg transition-colors"
+            >
+              <Trash2 size={14} />
+              <span className="hidden sm:inline">삭제</span>
+            </button>
             {(thesis?.confirmed === 'draft' || thesis?.confirmed === 'needs_review') && hasContent && (
               <button
                 onClick={handleConfirm}
@@ -971,6 +1052,41 @@ export default function ThesisPage() {
           <TickerReportsTab tickerId={id} />
         )}
       </main>
+
+      {/* 삭제 확인 모달 */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-gray-900 dark:text-white font-semibold text-base flex items-center gap-2">
+              <Trash2 size={16} className="text-red-500" /> 종목 삭제
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              <span className="font-medium text-gray-900 dark:text-white">{ticker?.name}</span>
+              {ticker && <span className="text-gray-400 dark:text-gray-500"> ({ticker.symbol})</span>}을 삭제합니다.
+            </p>
+            <p className="text-xs text-red-600 dark:text-red-400">
+              Thesis, 보고서, 재무 데이터가 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.
+            </p>
+            <div className="flex gap-3 justify-end pt-1">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-50"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex items-center gap-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* AI 분석 모달 */}
       {showAnalyzeModal && (

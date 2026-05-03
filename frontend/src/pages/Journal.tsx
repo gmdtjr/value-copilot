@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag } from 'lucide-react'
+import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag, PenLine } from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { ThemeControls } from '../components/ThemeControls'
+import type { Ticker } from '../types'
 
 // ── TradeLog types & helpers ──────────────────────────────────────────────────
 
@@ -69,6 +70,255 @@ function groupByDate<T extends { detected_at?: string; created_at?: string }>(
       return toMs(b) - toMs(a)
     })
     .map(([date, items]) => ({ date, items }))
+}
+
+// ── Manual TradeLog Composer ──────────────────────────────────────────────────
+
+const ACTION_OPTIONS = [
+  { value: 'buy',    label: '신규매수' },
+  { value: 'add',    label: '추가매수' },
+  { value: 'reduce', label: '일부매도' },
+  { value: 'sell',   label: '전량매도' },
+] as const
+
+function ManualTradeComposer({
+  tickers,
+  onCreated,
+  onClose,
+}: {
+  tickers: Ticker[]
+  onCreated: (log: TradeLog) => void
+  onClose: () => void
+}) {
+  const portfolioTickers = tickers.filter(t => t.status === 'portfolio')
+
+  const [tickerId, setTickerId] = useState(portfolioTickers[0]?.id ?? '')
+  const [action, setAction] = useState<'buy' | 'sell' | 'add' | 'reduce'>('buy')
+  const [qtyBefore, setQtyBefore] = useState('0')
+  const [qtyAfter, setQtyAfter] = useState('')
+  const [priceBefore, setPriceBefore] = useState('0')
+  const [priceAfter, setPriceAfter] = useState('')
+  const [detectedAt, setDetectedAt] = useState(() => new Date().toISOString().slice(0, 10))
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  // 종목 선택 시 포트폴리오 수량/단가 자동 입력
+  function handleTickerChange(id: string) {
+    setTickerId(id)
+    const t = tickers.find(t => t.id === id)
+    if (!t) return
+    const qty = t.portfolio_quantity?.toString() ?? ''
+    const price = t.portfolio_avg_price?.toString() ?? ''
+    applyActionDefaults(action, qty, price)
+  }
+
+  function applyActionDefaults(act: typeof action, qty: string, price: string) {
+    if (act === 'buy') {
+      setQtyBefore('0'); setQtyAfter(qty)
+      setPriceBefore('0'); setPriceAfter(price)
+    } else if (act === 'sell') {
+      setQtyBefore(qty); setQtyAfter('0')
+      setPriceBefore(price); setPriceAfter('0')
+    } else {
+      setQtyBefore(qty); setQtyAfter(qty)
+      setPriceBefore(price); setPriceAfter(price)
+    }
+  }
+
+  function handleActionChange(act: typeof action) {
+    setAction(act)
+    const t = tickers.find(t => t.id === tickerId)
+    const qty = t?.portfolio_quantity?.toString() ?? ''
+    const price = t?.portfolio_avg_price?.toString() ?? ''
+    applyActionDefaults(act, qty, price)
+  }
+
+  // 초기 자동입력
+  useEffect(() => {
+    if (portfolioTickers.length > 0) handleTickerChange(portfolioTickers[0].id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function submit() {
+    setError('')
+    if (!tickerId) { setError('종목을 선택하세요'); return }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/tradelog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker_id: tickerId,
+          action,
+          quantity_before: parseFloat(qtyBefore) || 0,
+          quantity_after: parseFloat(qtyAfter) || 0,
+          avg_price_before: parseFloat(priceBefore) || 0,
+          avg_price_after: parseFloat(priceAfter) || 0,
+          detected_at: detectedAt ? new Date(detectedAt).toISOString() : undefined,
+          note: note.trim() || undefined,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: '오류 발생' }))
+        setError(err.detail || '오류 발생')
+        return
+      }
+      const created: TradeLog = await res.json()
+      onCreated(created)
+      onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const selectedTicker = tickers.find(t => t.id === tickerId)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h2 className="text-gray-900 dark:text-white font-semibold text-base flex items-center gap-2">
+            <PenLine size={16} className="text-violet-400" /> 거래 수동 기록
+          </h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+            <X size={18} />
+          </button>
+        </div>
+
+        {portfolioTickers.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+            포트폴리오에 종목이 없습니다. KIS 동기화 후 다시 시도하세요.
+          </p>
+        ) : (
+          <>
+            {/* 종목 선택 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">종목</label>
+              <select
+                value={tickerId}
+                onChange={e => handleTickerChange(e.target.value)}
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-violet-500"
+              >
+                {portfolioTickers.map(t => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.symbol})</option>
+                ))}
+              </select>
+              {selectedTicker && (
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                  현재 포트폴리오: {selectedTicker.portfolio_quantity?.toFixed(2) ?? '-'}주
+                  {selectedTicker.portfolio_avg_price ? ` · 평균단가 ${selectedTicker.portfolio_avg_price.toLocaleString()}` : ''}
+                </p>
+              )}
+            </div>
+
+            {/* 거래 유형 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 유형</label>
+              <div className="grid grid-cols-4 gap-1.5">
+                {ACTION_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleActionChange(opt.value)}
+                    className={`py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      action === opt.value
+                        ? ACTION_COLOR[opt.value] + ' border-transparent'
+                        : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 수량 */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 전 수량</label>
+                <input
+                  type="number" min="0" step="any"
+                  value={qtyBefore}
+                  onChange={e => setQtyBefore(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 후 수량</label>
+                <input
+                  type="number" min="0" step="any"
+                  value={qtyAfter}
+                  onChange={e => setQtyAfter(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
+            </div>
+
+            {/* 평균단가 */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 전 평균단가</label>
+                <input
+                  type="number" min="0" step="any"
+                  value={priceBefore}
+                  onChange={e => setPriceBefore(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 후 평균단가</label>
+                <input
+                  type="number" min="0" step="any"
+                  value={priceAfter}
+                  onChange={e => setPriceAfter(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
+            </div>
+
+            {/* 날짜 */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 날짜</label>
+              <input
+                type="date"
+                value={detectedAt}
+                onChange={e => setDetectedAt(e.target.value)}
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-violet-500"
+              />
+            </div>
+
+            {/* 메모 (선택) */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">거래 이유 (선택)</label>
+              <textarea
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                placeholder="매수/매도 이유, thesis 관련 판단..."
+                rows={2}
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-500"
+              />
+            </div>
+
+            {error && <p className="text-xs text-red-500 dark:text-red-400">{error}</p>}
+
+            <div className="flex gap-3 justify-end pt-1">
+              <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
+                취소
+              </button>
+              <button
+                onClick={submit}
+                disabled={saving || !tickerId}
+                className="flex items-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <PenLine size={14} />}
+                기록 추가
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function NoteEditor({ log, onSave }: { log: TradeLog; onSave: (id: string, note: string) => void }) {
@@ -312,6 +562,8 @@ export default function JournalPage() {
   const [logs, setLogs] = useState<TradeLog[]>([])
   const [logsLoading, setLogsLoading] = useState(true)
   const [tradeFilter, setTradeFilter] = useState<'all' | 'unnoted'>('all')
+  const [showManualForm, setShowManualForm] = useState(false)
+  const [tickers, setTickers] = useState<Ticker[]>([])
 
   // idea memo state
   const [ideas, setIdeas] = useState<IdeaMemo[]>([])
@@ -320,6 +572,7 @@ export default function JournalPage() {
   useEffect(() => {
     fetchLogs()
     fetchIdeas()
+    fetch('/api/tickers').then(r => r.ok ? r.json() : []).then(setTickers).catch(() => null)
   }, [])
 
   async function fetchLogs() {
@@ -340,6 +593,10 @@ export default function JournalPage() {
     } finally {
       setIdeasLoading(false)
     }
+  }
+
+  function handleLogCreated(log: TradeLog) {
+    setLogs(prev => [log, ...prev].sort((a, b) => b.detected_at.localeCompare(a.detected_at)))
   }
 
   function handleSaveNote(id: string, note: string) {
@@ -427,23 +684,31 @@ export default function JournalPage() {
         {/* ── 거래일지 탭 ── */}
         {tab === 'trade' && (
           <>
-            <div className="flex items-center justify-end gap-1">
+            <div className="flex items-center justify-between gap-2">
               <button
-                onClick={() => setTradeFilter('all')}
-                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  tradeFilter === 'all' ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-900 dark:text-white' : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-                }`}
+                onClick={() => setShowManualForm(true)}
+                className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
               >
-                전체 {logs.length}
+                <PenLine size={12} /> 수동 기록
               </button>
-              <button
-                onClick={() => setTradeFilter('unnoted')}
-                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  tradeFilter === 'unnoted' ? 'bg-amber-100 border-amber-300 dark:bg-amber-800 dark:border-amber-700 text-amber-700 dark:text-amber-200' : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-                }`}
-              >
-                미작성 {unnoted}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setTradeFilter('all')}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    tradeFilter === 'all' ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-900 dark:text-white' : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                  }`}
+                >
+                  전체 {logs.length}
+                </button>
+                <button
+                  onClick={() => setTradeFilter('unnoted')}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    tradeFilter === 'unnoted' ? 'bg-amber-100 border-amber-300 dark:bg-amber-800 dark:border-amber-700 text-amber-700 dark:text-amber-200' : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+                  }`}
+                >
+                  미작성 {unnoted}
+                </button>
+              </div>
             </div>
 
             {logsLoading && <p className="text-gray-400 dark:text-gray-500 text-sm text-center py-12">불러오는 중...</p>}
@@ -525,6 +790,14 @@ export default function JournalPage() {
         )}
 
       </main>
+
+      {showManualForm && (
+        <ManualTradeComposer
+          tickers={tickers}
+          onCreated={handleLogCreated}
+          onClose={() => setShowManualForm(false)}
+        />
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Settings, BookOpen, ExternalLink } from 'lucide-react'
+import { PlusCircle, TrendingUp, Eye, AlertCircle, FileText, RefreshCw, Bell, BellOff, X, Settings, BookOpen, ExternalLink, Trash2 } from 'lucide-react'
 import { api } from '../api'
 import { ThemeControls } from '../components/ThemeControls'
 import type { Ticker, Market } from '../types'
@@ -77,6 +77,11 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<Record<string, string>>({ us_data_source: 'yfinance' })
   const [savingSettings, setSavingSettings] = useState(false)
   const [sysInfo, setSysInfo] = useState<Record<string, boolean>>({})
+
+  // Delete state
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false)
 
   // Multi-select state
   const [selectMode, setSelectMode] = useState(false)
@@ -271,6 +276,39 @@ export default function Dashboard() {
     }
   }
 
+  async function handleDelete() {
+    if (!deleteConfirmId) return
+    setDeleting(true)
+    try {
+      await api.deleteTicker(deleteConfirmId)
+      setTickers((prev) => prev.filter((t) => t.id !== deleteConfirmId))
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(deleteConfirmId); return next })
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '삭제 실패')
+    } finally {
+      setDeleting(false)
+      setDeleteConfirmId(null)
+    }
+  }
+
+  async function handleBulkDelete() {
+    const ids = Array.from(selectedIds)
+    setBulkDeleteConfirm(false)
+    setDeleting(true)
+    const failed: string[] = []
+    for (const id of ids) {
+      try {
+        await api.deleteTicker(id)
+        setTickers((prev) => prev.filter((t) => t.id !== id))
+      } catch {
+        failed.push(tickers.find((t) => t.id === id)?.symbol ?? id)
+      }
+    }
+    setSelectedIds(new Set())
+    setDeleting(false)
+    if (failed.length) alert(`삭제 실패: ${failed.join(', ')}`)
+  }
+
   const JOB_LABEL: Record<JobStatus, string> = {
     waiting: '대기',
     running: '진행중',
@@ -398,6 +436,14 @@ export default function Dashboard() {
               >
                 <ExternalLink size={13} />
                 Valley 링크 찾기
+              </button>
+              <button
+                onClick={() => setBulkDeleteConfirm(true)}
+                disabled={bulkRunning || bulkInProgress || deleting}
+                className="flex items-center gap-1.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+              >
+                <Trash2 size={13} />
+                삭제
               </button>
               <button
                 onClick={() => setSelectedIds(new Set())}
@@ -900,6 +946,13 @@ export default function Dashboard() {
                           <Eye size={15} />
                           Thesis
                         </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(ticker.id) }}
+                          title="종목 삭제"
+                          className="text-gray-400 dark:text-gray-600 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </>
                     )}
                   </div>
@@ -934,6 +987,75 @@ export default function Dashboard() {
           )
         })()}
       </main>
+
+      {/* bulk 삭제 확인 모달 */}
+      {bulkDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-4">
+            <h2 className="text-gray-900 dark:text-white font-semibold text-base flex items-center gap-2">
+              <Trash2 size={16} className="text-red-500" /> 종목 일괄 삭제
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              선택한 <span className="font-medium text-gray-900 dark:text-white">{selectedIds.size}개</span> 종목을 삭제합니다.
+            </p>
+            <p className="text-xs text-red-600 dark:text-red-400">
+              각 종목의 Thesis, 보고서, 재무 데이터가 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.
+            </p>
+            <div className="flex gap-3 justify-end pt-1">
+              <button
+                onClick={() => setBulkDeleteConfirm(false)}
+                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                className="flex items-center gap-2 bg-red-700 hover:bg-red-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                <Trash2 size={14} /> {selectedIds.size}개 삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 삭제 확인 모달 */}
+      {deleteConfirmId && (() => {
+        const ticker = tickers.find(t => t.id === deleteConfirmId)
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+            <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-4">
+              <h2 className="text-gray-900 dark:text-white font-semibold text-base flex items-center gap-2">
+                <Trash2 size={16} className="text-red-500" /> 종목 삭제
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                <span className="font-medium text-gray-900 dark:text-white">{ticker?.name}</span>
+                {ticker && <span className="text-gray-400 dark:text-gray-500"> ({ticker.symbol})</span>}을 삭제합니다.
+              </p>
+              <p className="text-xs text-red-600 dark:text-red-400">
+                Thesis, 보고서, 재무 데이터가 모두 삭제됩니다. 이 작업은 되돌릴 수 없습니다.
+              </p>
+              <div className="flex gap-3 justify-end pt-1">
+                <button
+                  onClick={() => setDeleteConfirmId(null)}
+                  disabled={deleting}
+                  className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-50"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="flex items-center gap-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                >
+                  {deleting ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  삭제
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

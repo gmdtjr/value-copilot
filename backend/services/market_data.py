@@ -22,13 +22,18 @@ def get_yahoo_quote(symbol: str) -> Optional[dict]:
             return None
         result = resp.json()["chart"]["result"][0]
         meta = result["meta"]
+        price = meta.get("regularMarketPrice", 0)
+        prev_close = meta.get("regularMarketPreviousClose") or meta.get("chartPreviousClose") or 0
+        if meta.get("regularMarketChangePercent") is not None:
+            change_pct = round(meta["regularMarketChangePercent"], 2)
+        elif prev_close:
+            change_pct = round((price - prev_close) / prev_close * 100, 2)
+        else:
+            change_pct = 0.0
         return {
-            "price": round(meta.get("regularMarketPrice", 0), 2),
-            "prev_close": round(meta.get("chartPreviousClose", 0), 2),
-            "change_pct": round(
-                (meta.get("regularMarketPrice", 0) - meta.get("chartPreviousClose", 1))
-                / meta.get("chartPreviousClose", 1) * 100, 2
-            ),
+            "price": round(price, 2),
+            "prev_close": round(prev_close, 2),
+            "change_pct": change_pct,
         }
     except Exception as e:
         logger.warning("Yahoo quote 조회 실패 %s: %s", symbol, e)

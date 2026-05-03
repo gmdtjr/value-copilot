@@ -68,6 +68,16 @@ export const api = {
     return res.json()
   },
 
+  async deleteTicker(tickerId: string): Promise<void> {
+    const res = await fetch(`${BASE}/tickers/${tickerId}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(await res.text())
+  },
+
+  async resolveValley(tickerId: string): Promise<void> {
+    const res = await fetch(`${BASE}/tickers/${tickerId}/resolve-valley`, { method: 'POST' })
+    if (!res.ok) throw new Error(await res.text())
+  },
+
   /**
    * SSE 스트림으로 피드백 기반 Thesis 재생성.
    */

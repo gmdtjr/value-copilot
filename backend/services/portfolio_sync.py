@@ -126,6 +126,9 @@ def sync_portfolio() -> dict:
                 logger.error("포트폴리오 upsert 실패 %s: %s", sym, e)
                 errors.append(sym)
 
+        # upsert 결과를 trade 감지 쿼리에서 볼 수 있도록 flush
+        db.flush()
+
         # 청산 종목 처리 (DB에 있지만 KIS에 없는 종목 → qty=0, watchlist)
         synced_symbols = set(aggregated.keys())
         for p in db.query(Portfolio).join(Ticker).filter(Portfolio.quantity > 0).all():

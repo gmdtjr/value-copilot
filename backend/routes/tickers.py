@@ -512,6 +512,46 @@ def get_ticker_reports(ticker_id: str, db: Session = Depends(get_db)):
     ]
 
 
+@router.delete("/{ticker_id}", status_code=204)
+def delete_ticker(ticker_id: str, db: Session = Depends(get_db)):
+    """종목 삭제 (thesis, reports, portfolio, cache 포함 cascade 삭제)."""
+    ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
+    if not ticker:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+    symbol = ticker.symbol
+    db.delete(ticker)
+    db.commit()
+    logger.info("Ticker deleted: %s", symbol)
+
+
+@router.post("/{ticker_id}/resolve-valley", status_code=202)
+def resolve_valley_single(ticker_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """개별 종목 Valley.town URL 조회 (백그라운드)."""
+    ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
+    if not ticker:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+    background_tasks.add_task(
+        _run_resolve_valley_single,
+        str(ticker.id), ticker.symbol, ticker.name, ticker.market.value,
+    )
+    return {"message": f"{ticker.symbol} Valley 링크 조회 시작됨"}
+
+
+def _run_resolve_valley_single(ticker_id: str, symbol: str, name: str, market: str):
+    from models.db import SessionLocal
+    db = SessionLocal()
+    try:
+        url, reason = resolve_valley_url_with_reason(db, ticker_id, symbol, name, market)
+        if url:
+            logger.info("Valley URL resolved for %s: %s", symbol, url)
+        else:
+            logger.warning("Valley URL not found for %s: %s", symbol, reason)
+    except Exception:
+        logger.exception("Single valley resolve failed: %s", symbol)
+    finally:
+        db.close()
+
+
 @router.post("/{ticker_id}/refresh-data", status_code=202)
 def refresh_data(ticker_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """재무 데이터 강제 새로고침 (캐시 무효화 + 재수집 + SEC/DART 파이프라인)."""
