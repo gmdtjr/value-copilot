@@ -5,7 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     create_engine, Column, String, Boolean, DateTime,
-    Text, Enum as SAEnum, ForeignKey, Float, JSON, UniqueConstraint,
+    Text, Enum as SAEnum, ForeignKey, Float, JSON, UniqueConstraint, Integer,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -63,6 +63,7 @@ class ThesisStatusEnum(str, enum.Enum):
     DRAFT = "draft"
     CONFIRMED = "confirmed"
     NEEDS_REVIEW = "needs_review"
+    RETIRED = "retired"
 
 class ReportTypeEnum(str, enum.Enum):
     ANALYSIS = "analysis"
@@ -100,16 +101,33 @@ class Ticker(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    thesis = relationship("Thesis", back_populates="ticker", uselist=False, cascade="all, delete-orphan")
+    theses = relationship(
+        "Thesis",
+        back_populates="ticker",
+        cascade="all, delete-orphan",
+    )
     reports = relationship("Report", back_populates="ticker", cascade="all, delete-orphan")
     portfolio = relationship("Portfolio", back_populates="ticker", uselist=False, cascade="all, delete-orphan")
+
+    @property
+    def thesis(self):
+        """Active thesis: confirmed > needs_review > draft (by version_number desc). Excludes retired."""
+        active = [t for t in self.theses if t.confirmed and t.confirmed != ThesisStatusEnum.RETIRED]
+        if not active:
+            return None
+        priority = {ThesisStatusEnum.CONFIRMED: 0, ThesisStatusEnum.NEEDS_REVIEW: 1, ThesisStatusEnum.DRAFT: 2}
+        active.sort(key=lambda t: (priority.get(t.confirmed, 99), -(t.version_number or 1)))
+        return active[0]
 
 
 class Thesis(Base):
     __tablename__ = "theses"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id"), unique=True, nullable=False)
+    ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id", ondelete="CASCADE"), nullable=False)
+    version_number = Column(Integer, default=1, nullable=False)
+    parent_version_id = Column(UUID(as_uuid=True), nullable=True)
+
     confirmed = Column(SAEnum(ThesisStatusEnum, name="thesisstatusenum"), default=ThesisStatusEnum.DRAFT, nullable=False)
     confirmed_at = Column(DateTime, nullable=True)
     thesis = Column(Text, nullable=True)
@@ -120,7 +138,13 @@ class Thesis(Base):
     stock_type = Column(_string_enum(StockTypeEnum, name="stocktypeenum"), nullable=True)
     seed_memo = Column(Text, nullable=True)
 
-    ticker = relationship("Ticker", back_populates="thesis")
+    # Phase 2 신규 필드
+    exploration_note = Column(Text, nullable=True)   # 외부 탐색에서 건진 핵심 인사이트
+    key_logic = Column(Text, nullable=True)           # "이 논리가 깨지면 thesis가 무너진다" 한 단락
+    retired_at = Column(DateTime, nullable=True)
+    retirement_reason = Column(String(50), nullable=True)  # broken|sold|superseded|manual
+
+    ticker = relationship("Ticker", back_populates="theses")
 
 
 class Report(Base):
@@ -228,3 +252,52 @@ class IdeaMemo(Base):
     ticker_symbol = Column(String(20), nullable=True)  # DB 종목과 무관한 자유 태그
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ConversationImportTypeEnum(str, enum.Enum):
+    DISCOVERY = "discovery"
+    THESIS_CHALLENGE = "thesis_challenge"
+    PORTFOLIO_REVIEW = "portfolio_review"
+    DEEP_ANALYSIS = "deep_analysis"
+
+
+class ConversationImport(Base):
+    """외부 탐색(Claude 대화) 결과를 시스템으로 가져오기."""
+    __tablename__ = "conversation_imports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id", ondelete="SET NULL"), nullable=True)
+    import_type = Column(_string_enum(ConversationImportTypeEnum, name="convimporttypeenum"), nullable=False)
+    summary = Column(Text, nullable=False)
+    raw_excerpt = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    ticker = relationship("Ticker")
+
+
+class HumanResponseTypeEnum(str, enum.Enum):
+    AGREE = "agree"
+    DISAGREE = "disagree"
+    PARTIAL = "partial"
+    OVERRIDE = "override"
+    NOTE = "note"
+
+
+class HumanResponseTargetEnum(str, enum.Enum):
+    REPORT = "report"
+    THESIS = "thesis"
+    BREAK_SIGNAL = "break_signal"
+    RETROSPECTIVE = "retrospective"
+
+
+class HumanResponse(Base):
+    """LLM 출력(보고서 섹션, thesis, break signal 등)에 대한 사람 메모."""
+    __tablename__ = "human_responses"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    target_type = Column(_string_enum(HumanResponseTargetEnum, name="humanresponsetargetenum"), nullable=False)
+    target_id = Column(UUID(as_uuid=True), nullable=False)
+    section_key = Column(String(50), nullable=True)  # 보고서 섹션 구분 (optional)
+    response_type = Column(_string_enum(HumanResponseTypeEnum, name="humanresponsetypeenum"), nullable=False)
+    content = Column(Text, nullable=False)
+    recorded_at = Column(DateTime, default=datetime.utcnow)

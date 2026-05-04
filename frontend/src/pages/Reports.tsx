@@ -1,11 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp, Search, BarChart2, Trash2, MessageSquare, Send, X, Eye, EyeOff, Plus, CheckCircle, PanelLeft } from 'lucide-react'
+import {
+  ArrowLeft, FileText, RefreshCw, Loader2, ChevronDown, ChevronUp,
+  Trash2, MessageSquare, Send, X, Eye, EyeOff, Plus, CheckCircle,
+  PanelLeft, Copy, Check, StickyNote, ThumbsUp, ThumbsDown,
+  Minus, AlertCircle, BarChart2,
+} from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
 import { ThemeControls } from '../components/ThemeControls'
 import { useTheme } from '../contexts/ThemeContext'
-import type { ReportComment } from '../types'
+import type { ReportComment, HumanResponse, HumanResponseType } from '../types'
 
 interface Report {
   id: string
@@ -33,7 +38,7 @@ function parseSseEvents(chunk: string): Array<Record<string, unknown>> {
 }
 
 const TYPE_LABEL: Record<string, string> = {
-  daily_brief: '데일리 브리핑',
+  daily_brief: '주간 브리핑',
   analysis: '종목 심층 분석',
   macro: '매크로',
   discovery: '종목 탐색',
@@ -48,7 +53,6 @@ const TYPE_COLOR: Record<string, string> = {
   portfolio_review: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200',
 }
 
-// 포트폴리오 점검 보고서의 5섹션
 const PORTFOLIO_REVIEW_SECTIONS = [
   { key: 'portfolio_overview', label: '1. 포트폴리오 개요' },
   { key: 'holdings_assessment', label: '2. 종목별 평가' },
@@ -57,7 +61,6 @@ const PORTFOLIO_REVIEW_SECTIONS = [
   { key: 'action_items', label: '5. 실행 항목' },
 ]
 
-// 종목 탐색 보고서의 5섹션
 const DISCOVERY_SECTIONS = [
   { key: 'theme_analysis', label: '1. 테마 분석' },
   { key: 'us_picks', label: '2. 미국 추천 종목' },
@@ -66,7 +69,6 @@ const DISCOVERY_SECTIONS = [
   { key: 'next_steps', label: '5. 다음 단계' },
 ]
 
-// 심층 분석 보고서의 8섹션
 const DEEP_SECTIONS = [
   { key: 'business_overview', label: '1. 기업 개요' },
   { key: 'competitive_position', label: '2. 경쟁 구도' },
@@ -78,19 +80,267 @@ const DEEP_SECTIONS = [
   { key: 'bull_bear_synthesis', label: '8. 강세/약세 종합' },
 ]
 
+const BRIEFING_SECTIONS = [
+  { key: 'macro_changes', label: '1. 매크로 변화' },
+  { key: 'break_summary', label: '2. 모니터링 요약' },
+  { key: 'upcoming_events', label: '3. 예정 이벤트' },
+  // legacy daily_brief
+  { key: 'macro', label: '1. 매크로 환경' },
+  { key: 'portfolio_summary', label: '2. 포트폴리오 브리핑' },
+  { key: 'watchlist', label: '3. 관심 종목' },
+]
+
+const MACRO_SECTIONS = [
+  { key: 'market_overview', label: '1. 시장 환경' },
+  { key: 'macro_factors', label: '2. 매크로 요인' },
+  { key: 'portfolio_implication', label: '3. 포트폴리오 시사점' },
+]
+
 function extractSection(content: string, sectionName: string): string {
   const pattern = new RegExp(`<section name="${sectionName}">(.*?)</section>`, 's')
   const match = content.match(pattern)
   return match ? match[1].trim() : ''
 }
 
-type AddState = 'idle' | 'loading' | 'added' | 'exists'
+// ── HumanResponse 슬롯 ────────────────────────────────────────────────────────
 
-interface ExtractedTicker {
-  symbol: string
-  name: string
-  market: 'US_Stock' | 'KR_Stock'
+const RESPONSE_OPTIONS: { value: HumanResponseType; label: string; icon: ReactNode; color: string }[] = [
+  { value: 'agree',     label: '동의',     icon: <ThumbsUp size={12} />,    color: 'text-emerald-600 dark:text-emerald-400' },
+  { value: 'disagree',  label: '반대',     icon: <ThumbsDown size={12} />,  color: 'text-red-600 dark:text-red-400' },
+  { value: 'partial',   label: '부분동의', icon: <Minus size={12} />,       color: 'text-amber-600 dark:text-amber-400' },
+  { value: 'override',  label: '내 판단',  icon: <AlertCircle size={12} />, color: 'text-blue-600 dark:text-blue-400' },
+  { value: 'note',      label: '메모',     icon: <StickyNote size={12} />,  color: 'text-gray-600 dark:text-gray-400' },
+]
+
+const RESPONSE_COLOR: Record<HumanResponseType, string> = {
+  agree:    'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  disagree: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  partial:  'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  override: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  note:     'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
 }
+
+function SectionResponseSlot({
+  reportId,
+  sectionKey,
+}: {
+  reportId: string
+  sectionKey: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [responses, setResponses] = useState<HumanResponse[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [type, setType] = useState<HumanResponseType>('note')
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    if (loaded) return
+    const res = await fetch(`/api/human-responses?target_type=report&target_id=${reportId}`)
+    if (res.ok) {
+      const all: HumanResponse[] = await res.json()
+      setResponses(all.filter(r => r.section_key === sectionKey))
+    }
+    setLoaded(true)
+  }
+
+  function toggle() {
+    if (!open) load()
+    setOpen(v => !v)
+  }
+
+  async function submit() {
+    if (!text.trim()) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/human-responses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_type: 'report',
+          target_id: reportId,
+          section_key: sectionKey,
+          response_type: type,
+          content: text.trim(),
+        }),
+      })
+      if (res.ok) {
+        const created: HumanResponse = await res.json()
+        setResponses(prev => [...prev, created])
+        setText('')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function del(id: string) {
+    const res = await fetch(`/api/human-responses/${id}`, { method: 'DELETE' })
+    if (res.ok || res.status === 204) setResponses(prev => prev.filter(r => r.id !== id))
+  }
+
+  const count = responses.length
+
+  return (
+    <div className="mt-1">
+      <button
+        onClick={toggle}
+        className={`flex items-center gap-1 text-xs transition-colors ${
+          count > 0
+            ? 'text-blue-600 dark:text-blue-400'
+            : 'text-gray-400 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-400'
+        }`}
+        title="내 메모 추가"
+      >
+        <StickyNote size={12} />
+        {count > 0 && <span>{count}</span>}
+      </button>
+
+      {open && (
+        <div className="mt-2 bg-gray-100 dark:bg-gray-800/60 border border-gray-300 dark:border-gray-700 rounded-lg p-3 space-y-3">
+          {responses.length > 0 && (
+            <div className="space-y-2">
+              {responses.map(r => (
+                <div key={r.id} className="group flex items-start gap-2">
+                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${RESPONSE_COLOR[r.response_type as HumanResponseType]}`}>
+                    {RESPONSE_OPTIONS.find(o => o.value === r.response_type)?.label}
+                  </span>
+                  <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed flex-1">{r.content}</p>
+                  <button
+                    onClick={() => del(r.id)}
+                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-400 transition-all"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-1 flex-wrap">
+            {RESPONSE_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setType(opt.value)}
+                className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
+                  type === opt.value
+                    ? RESPONSE_COLOR[opt.value] + ' border-transparent'
+                    : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:border-gray-400'
+                }`}
+              >
+                {opt.icon}
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              value={text}
+              onChange={e => setText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() } }}
+              placeholder="이 섹션에 대한 내 생각..."
+              className="flex-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-xs text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 focus:outline-none focus:border-gray-400 dark:focus:border-gray-500"
+              disabled={saving}
+            />
+            <button
+              onClick={submit}
+              disabled={saving || !text.trim()}
+              className="flex-shrink-0 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-40 text-gray-900 dark:text-white px-2 rounded transition-colors"
+            >
+              {saving ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Report View Components ────────────────────────────────────────────────────
+
+function CollapsibleSectionView({
+  sections,
+  defaultOpen,
+  report,
+  withResponse = false,
+}: {
+  sections: { key: string; label: string }[]
+  defaultOpen: string[]
+  report: Report
+  withResponse?: boolean
+}) {
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set(defaultOpen))
+
+  function toggle(key: string) {
+    setOpenSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const hasSections = sections.some(({ key }) => extractSection(report.content, key))
+  if (!hasSections) return <Markdown content={report.content} />
+
+  return (
+    <div className="space-y-2">
+      {sections.map(({ key, label }) => {
+        const text = extractSection(report.content, key)
+        if (!text) return null
+        const isOpen = openSections.has(key)
+        return (
+          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggle(key)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
+            >
+              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
+              {isOpen
+                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
+              }
+            </button>
+            {isOpen && (
+              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
+                <Markdown content={text} />
+                {withResponse && (
+                  <SectionResponseSlot reportId={report.id} sectionKey={key} />
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DeepReportView({ report }: { report: Report }) {
+  return (
+    <CollapsibleSectionView
+      sections={DEEP_SECTIONS}
+      defaultOpen={['business_overview', 'bull_bear_synthesis']}
+      report={report}
+      withResponse
+    />
+  )
+}
+
+function PortfolioReviewView({ report }: { report: Report }) {
+  return (
+    <CollapsibleSectionView
+      sections={PORTFOLIO_REVIEW_SECTIONS}
+      defaultOpen={['portfolio_overview', 'holdings_assessment', 'action_items']}
+      report={report}
+      withResponse
+    />
+  )
+}
+
+type AddState = 'idle' | 'loading' | 'added' | 'exists'
+interface ExtractedTicker { symbol: string; name: string; market: 'US_Stock' | 'KR_Stock' }
 
 function extractDiscoveryTickers(content: string): ExtractedTicker[] {
   const RE = /\*\*\[([A-Z0-9]+)\]\s+([^\*\n]+?)\*\*/g
@@ -111,125 +361,10 @@ function extractDiscoveryTickers(content: string): ExtractedTicker[] {
   return result
 }
 
-function DeepReportView({ report }: { report: Report }) {
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['business_overview', 'bull_bear_synthesis'])
-  )
-
-  function toggle(key: string) {
-    setOpenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
-  // 섹션이 파싱되는지 확인
-  const hasSections = DEEP_SECTIONS.some(({ key }) => extractSection(report.content, key))
-
-  if (!hasSections) {
-    return <Markdown content={report.content} />
-  }
-
-  return (
-    <div className="space-y-2">
-      {DEEP_SECTIONS.map(({ key, label }) => {
-        const text = extractSection(report.content, key)
-        if (!text) return null
-        const isOpen = openSections.has(key)
-        return (
-          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
-            <button
-              onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
-            >
-              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
-              {isOpen
-                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-              }
-            </button>
-            {isOpen && (
-              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
-                <Markdown content={text} />
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function PortfolioReviewView({ report }: { report: Report }) {
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['portfolio_overview', 'holdings_assessment', 'action_items'])
-  )
-
-  function toggle(key: string) {
-    setOpenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
-  const hasSections = PORTFOLIO_REVIEW_SECTIONS.some(({ key }) => extractSection(report.content, key))
-
-  if (!hasSections) {
-    return <Markdown content={report.content} />
-  }
-
-  return (
-    <div className="space-y-2">
-      {PORTFOLIO_REVIEW_SECTIONS.map(({ key, label }) => {
-        const text = extractSection(report.content, key)
-        if (!text) return null
-        const isOpen = openSections.has(key)
-        return (
-          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
-            <button
-              onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
-            >
-              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
-              {isOpen
-                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-              }
-            </button>
-            {isOpen && (
-              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
-                <Markdown content={text} />
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function DiscoveryReportView({ report }: { report: Report }) {
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['theme_analysis', 'us_picks', 'kr_picks'])
-  )
   const [addStates, setAddStates] = useState<Record<string, AddState>>({})
-
   useEffect(() => { setAddStates({}) }, [report.id])
-
   const extractedTickers = useMemo(() => extractDiscoveryTickers(report.content), [report.content])
-
-  function toggle(key: string) {
-    setOpenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
 
   async function addToWatchlist(ticker: ExtractedTicker) {
     const cur = addStates[ticker.symbol] ?? 'idle'
@@ -245,12 +380,6 @@ function DiscoveryReportView({ report }: { report: Report }) {
     } catch {
       setAddStates(prev => ({ ...prev, [ticker.symbol]: 'idle' }))
     }
-  }
-
-  const hasSections = DISCOVERY_SECTIONS.some(({ key }) => extractSection(report.content, key))
-
-  if (!hasSections) {
-    return <Markdown content={report.content} />
   }
 
   return (
@@ -281,157 +410,181 @@ function DiscoveryReportView({ report }: { report: Report }) {
                     {isKr ? 'KR' : 'US'}
                   </span>
                   <span className="font-semibold">{t.symbol}</span>
-                  {state === 'loading'
-                    ? <Loader2 size={11} className="animate-spin" />
-                    : done
-                    ? <CheckCircle size={11} />
-                    : <Plus size={11} />
-                  }
+                  {state === 'loading' ? <Loader2 size={11} className="animate-spin" /> : done ? <CheckCircle size={11} /> : <Plus size={11} />}
                 </button>
               )
             })}
           </div>
-          {Object.values(addStates).some(s => s === 'exists') && (
-            <p className="text-xs text-gray-400 dark:text-gray-500">초록 체크 = 이미 관심/포트폴리오에 있는 종목</p>
-          )}
         </div>
       )}
-      <div className="space-y-2">
-        {DISCOVERY_SECTIONS.map(({ key, label }) => {
-          const text = extractSection(report.content, key)
-          if (!text) return null
-          const isOpen = openSections.has(key)
-          return (
-            <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
-              <button
-                onClick={() => toggle(key)}
-                className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
-              >
-                <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
-                {isOpen
-                  ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                  : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                }
-              </button>
-              {isOpen && (
-                <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
-                  <Markdown content={text} />
-                </div>
-              )}
-            </div>
-          )
-        })}
+      <CollapsibleSectionView
+        sections={DISCOVERY_SECTIONS}
+        defaultOpen={['theme_analysis', 'us_picks', 'kr_picks']}
+        report={report}
+        withResponse
+      />
+    </div>
+  )
+}
+
+function BriefingView({ report }: { report: Report }) {
+  // 주간 브리핑 섹션 먼저, 없으면 구형 daily_brief 섹션
+  const weeklyKeys = ['macro_changes', 'break_summary', 'upcoming_events']
+  const isWeekly = weeklyKeys.some(k => extractSection(report.content, k))
+  const sections = isWeekly
+    ? BRIEFING_SECTIONS.filter(s => weeklyKeys.includes(s.key))
+    : BRIEFING_SECTIONS.filter(s => ['macro', 'portfolio_summary', 'watchlist'].includes(s.key))
+  return (
+    <CollapsibleSectionView
+      sections={sections}
+      defaultOpen={sections.map(s => s.key)}
+      report={report}
+    />
+  )
+}
+
+function MacroReportView({ report }: { report: Report }) {
+  return (
+    <CollapsibleSectionView
+      sections={MACRO_SECTIONS}
+      defaultOpen={MACRO_SECTIONS.map(s => s.key)}
+      report={report}
+    />
+  )
+}
+
+// ── CopyPromptButton ──────────────────────────────────────────────────────────
+
+function PromptModal({ text, title, onClose }: { text: string; title: string; onClose: () => void }) {
+  const [innerCopied, setInnerCopied] = useState(false)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  function selectAll() {
+    taRef.current?.select()
+  }
+
+  async function doCopy() {
+    if (!text) return
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        taRef.current?.select()
+        document.execCommand('copy')
+      }
+      setInnerCopied(true)
+      setTimeout(() => setInnerCopied(false), 2000)
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-2xl p-5 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between">
+          <h2 className="text-gray-900 dark:text-white font-semibold text-base">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400">아래 텍스트를 복사해서 Claude에 붙여넣으세요.</p>
+        <textarea
+          ref={taRef}
+          readOnly
+          value={text}
+          onClick={selectAll}
+          rows={14}
+          className="flex-1 w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-700 dark:text-gray-200 font-mono resize-none focus:outline-none focus:border-gray-400 cursor-pointer"
+        />
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+            닫기
+          </button>
+          <button
+            onClick={doCopy}
+            className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            {innerCopied ? <><Check size={14} /> 복사됨!</> : <><Copy size={14} /> 전체 복사</>}
+          </button>
+        </div>
       </div>
     </div>
   )
 }
 
-const BRIEFING_SECTIONS = [
-  { key: 'macro', label: '1. 매크로 환경' },
-  { key: 'portfolio_summary', label: '2. 포트폴리오 브리핑' },
-  { key: 'watchlist', label: '3. 관심 종목' },
-]
+function CopyPromptButton({
+  type,
+  label,
+  title,
+  className,
+}: {
+  type: string
+  label: ReactNode
+  title: string
+  className: string
+}) {
+  const [state, setState] = useState<'idle' | 'loading' | 'copied' | 'error'>('idle')
+  const [promptText, setPromptText] = useState<string | null>(null)
 
-function DailyBriefingView({ report }: { report: Report }) {
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['macro', 'portfolio_summary', 'watchlist'])
-  )
+  async function copyPrompt() {
+    if (state === 'loading' || state === 'copied') return
+    setState('loading')
+    setPromptText(null)
+    try {
+      const res = await fetch(`/api/reports/explore-prompt?type=${type}`)
+      if (!res.ok) {
+        setState('error')
+        setTimeout(() => setState('idle'), 3000)
+        return
+      }
+      const { prompt } = await res.json()
 
-  function toggle(key: string) {
-    setOpenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+      // 클립보드 API 시도 (HTTPS 또는 localhost에서만 작동)
+      if (navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(prompt)
+          setState('copied')
+          setTimeout(() => setState('idle'), 2500)
+          return
+        } catch { /* fallthrough to modal */ }
+      }
+
+      // 폴백: 모달로 텍스트 표시
+      setPromptText(prompt)
+      setState('idle')
+    } catch {
+      setState('error')
+      setTimeout(() => setState('idle'), 3000)
+    }
   }
 
-  const hasSections = BRIEFING_SECTIONS.some(({ key }) => extractSection(report.content, key))
-  if (!hasSections) return <Markdown content={report.content} />
-
   return (
-    <div className="space-y-2">
-      {BRIEFING_SECTIONS.map(({ key, label }) => {
-        const text = extractSection(report.content, key)
-        if (!text) return null
-        const isOpen = openSections.has(key)
-        return (
-          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
-            <button
-              onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
-            >
-              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
-              {isOpen
-                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-              }
-            </button>
-            {isOpen && (
-              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
-                <Markdown content={text} />
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
+    <>
+      <button
+        onClick={copyPrompt}
+        disabled={state === 'loading'}
+        className={`flex items-center gap-1.5 text-white text-xs font-medium px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors disabled:opacity-50 ${className}`}
+      >
+        {state === 'loading'
+          ? <Loader2 size={13} className="animate-spin" />
+          : state === 'copied'
+          ? <><Check size={13} /> 복사됨</>
+          : state === 'error'
+          ? <><X size={13} /> 오류</>
+          : <>{label}</>
+        }
+      </button>
+      {promptText && (
+        <PromptModal
+          text={promptText}
+          title={title}
+          onClose={() => setPromptText(null)}
+        />
+      )}
+    </>
   )
 }
 
-const MACRO_SECTIONS = [
-  { key: 'market_overview', label: '1. 시장 환경' },
-  { key: 'macro_factors', label: '2. 매크로 요인' },
-  { key: 'portfolio_implication', label: '3. 포트폴리오 시사점' },
-]
-
-function MacroReportView({ report }: { report: Report }) {
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    new Set(['market_overview', 'macro_factors', 'portfolio_implication'])
-  )
-
-  function toggle(key: string) {
-    setOpenSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
-  const hasSections = MACRO_SECTIONS.some(({ key }) => extractSection(report.content, key))
-
-  if (!hasSections) return <Markdown content={report.content} />
-
-  return (
-    <div className="space-y-2">
-      {MACRO_SECTIONS.map(({ key, label }) => {
-        const text = extractSection(report.content, key)
-        if (!text) return null
-        const isOpen = openSections.has(key)
-        return (
-          <div key={key} className="border border-gray-300 dark:border-gray-700 rounded-lg overflow-hidden">
-            <button
-              onClick={() => toggle(key)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-750 transition-colors"
-            >
-              <span className="text-gray-900 dark:text-white text-sm font-medium">{label}</span>
-              {isOpen
-                ? <ChevronUp size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-                : <ChevronDown size={15} className="text-gray-500 dark:text-gray-400 flex-shrink-0" />
-              }
-            </button>
-            {isOpen && (
-              <div className="px-4 py-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-300 dark:border-gray-700">
-                <Markdown content={text} />
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
   const navigate = useNavigate()
@@ -439,32 +592,17 @@ export default function ReportsPage() {
   const [searchParams] = useSearchParams()
   const [reports, setReports] = useState<Report[]>([])
   const [loading, setLoading] = useState(true)
-  const [triggering, setTriggering] = useState(false)
   const [triggeringMacro, setTriggeringMacro] = useState(false)
   const [selected, setSelected] = useState<Report | null>(null)
   const [mobileShowDetail, setMobileShowDetail] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [showDiscovery, setShowDiscovery] = useState(false)
-  const [discoveryIdea, setDiscoveryIdea] = useState('')
-  const [discoveryLens, setDiscoveryLens] = useState('다양하게')
-  const [discovering, setDiscovering] = useState(false)
-  const [discoveryStream, setDiscoveryStream] = useState('')
-  const [discoverySaved, setDiscoverySaved] = useState(false)
-  const [discoveryError, setDiscoveryError] = useState<string | null>(null)
-  const discoveryRef = useRef<HTMLDivElement>(null)
-  const [reviewingPortfolio, setReviewingPortfolio] = useState(false)
-  const [portfolioReviewStream, setPortfolioReviewStream] = useState('')
-  const [showPortfolioStream, setShowPortfolioStream] = useState(false)
-  const portfolioReviewRef = useRef<HTMLDivElement>(null)
 
-  // Filter & multi-select
   const [filterType, setFilterType] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deletingBulk, setDeletingBulk] = useState(false)
 
   const filteredReports = filterType ? reports.filter(r => r.type === filterType) : reports
 
-  // Comments state
   const [comments, setComments] = useState<ReportComment[]>([])
   const [commentsLoading, setCommentsLoading] = useState(false)
   const [commentText, setCommentText] = useState('')
@@ -478,7 +616,6 @@ export default function ReportsPage() {
       if (res.ok) {
         const data: Report[] = await res.json()
         setReports(data)
-        // ?id= 쿼리 파라미터로 특정 보고서 바로 열기
         const targetId = searchParams.get('id')
         if (targetId) {
           const found = data.find(r => r.id === targetId)
@@ -498,7 +635,6 @@ export default function ReportsPage() {
     setCommentText('')
     setShowComments(false)
     setComments([])
-    // 읽음 처리
     if (!r.is_read) {
       const res = await fetch(`/api/reports/${r.id}/read`, {
         method: 'PATCH',
@@ -527,7 +663,7 @@ export default function ReportsPage() {
   }
 
   async function deleteReport(r: Report) {
-    if (!confirm(`"${TYPE_LABEL[r.type] ?? r.type}${r.ticker_name ?? r.ticker_symbol ? ` — ${r.ticker_name ?? r.ticker_symbol}` : ''}" 보고서를 삭제할까요? 코멘트도 함께 삭제됩니다.`)) return
+    if (!confirm(`"${TYPE_LABEL[r.type] ?? r.type}${r.ticker_name ?? r.ticker_symbol ? ` — ${r.ticker_name ?? r.ticker_symbol}` : ''}" 보고서를 삭제할까요?`)) return
     const res = await fetch(`/api/reports/${r.id}`, { method: 'DELETE' })
     if (res.ok || res.status === 204) {
       const next = reports.filter(x => x.id !== r.id)
@@ -551,28 +687,22 @@ export default function ReportsPage() {
   }
 
   function toggleSelectAll() {
-    if (selectedIds.size === filteredReports.length) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(filteredReports.map(r => r.id)))
-    }
+    if (selectedIds.size === filteredReports.length) setSelectedIds(new Set())
+    else setSelectedIds(new Set(filteredReports.map(r => r.id)))
   }
 
   async function deleteSelected() {
     if (selectedIds.size === 0) return
-    if (!confirm(`선택한 보고서 ${selectedIds.size}개를 삭제할까요? 코멘트도 함께 삭제됩니다.`)) return
+    if (!confirm(`선택한 보고서 ${selectedIds.size}개를 삭제할까요?`)) return
     setDeletingBulk(true)
     try {
-      await Promise.all(
-        [...selectedIds].map(id => fetch(`/api/reports/${id}`, { method: 'DELETE' }))
-      )
+      await Promise.all([...selectedIds].map(id => fetch(`/api/reports/${id}`, { method: 'DELETE' })))
       const remaining = reports.filter(r => !selectedIds.has(r.id))
       setReports(remaining)
       setSelectedIds(new Set())
       if (selected && selectedIds.has(selected.id)) {
-        const next = remaining[0] ?? null
-        setSelected(next)
-        if (!next) setMobileShowDetail(false)
+        setSelected(remaining[0] ?? null)
+        if (!remaining[0]) setMobileShowDetail(false)
       }
     } finally {
       setDeletingBulk(false)
@@ -625,31 +755,6 @@ export default function ReportsPage() {
     }
   }
 
-  async function triggerBriefing() {
-    setTriggering(true)
-    const beforeId = reports[0]?.id ?? null
-    try {
-      await fetch('/api/reports/daily-briefing/trigger', { method: 'POST' })
-      let elapsed = 0
-      const poll = setInterval(async () => {
-        elapsed += 3000
-        const res = await fetch('/api/reports')
-        if (res.ok) {
-          const data: Report[] = await res.json()
-          if (data[0]?.id !== beforeId) {
-            setReports(data)
-            setSelected(data[0])
-            clearInterval(poll)
-            setTriggering(false)
-          }
-        }
-        if (elapsed >= 60000) { clearInterval(poll); setTriggering(false) }
-      }, 3000)
-    } catch {
-      setTriggering(false)
-    }
-  }
-
   async function triggerMacro() {
     setTriggeringMacro(true)
     const beforeId = reports[0]?.id ?? null
@@ -672,141 +777,6 @@ export default function ReportsPage() {
       }, 3000)
     } catch {
       setTriggeringMacro(false)
-    }
-  }
-
-  async function runPortfolioReview() {
-    if (reviewingPortfolio) return
-    setReviewingPortfolio(true)
-    setPortfolioReviewStream('')
-    setShowPortfolioStream(true)
-    let savedReportId: string | undefined
-    try {
-      const res = await fetch('/api/reports/portfolio-review', { method: 'POST' })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: '오류 발생' }))
-        setPortfolioReviewStream(err.detail ?? '오류 발생')
-        return
-      }
-      if (!res.body) return
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const data = JSON.parse(line.slice(6))
-            if (data.type === 'chunk') {
-              setPortfolioReviewStream((prev) => prev + data.text)
-              if (portfolioReviewRef.current) {
-                portfolioReviewRef.current.scrollTop = portfolioReviewRef.current.scrollHeight
-              }
-            } else if (data.type === 'saved') {
-              savedReportId = data.report_id
-            }
-          } catch { /* ignore */ }
-        }
-      }
-    } catch (e) {
-      console.error(e)
-    } finally {
-      // 스트림 종료 후 무조건 목록 갱신
-      try {
-        const res2 = await fetch('/api/reports')
-        if (res2.ok) {
-          const updated: Report[] = await res2.json()
-          setReports(updated)
-          if (savedReportId) {
-            const found = updated.find(r => r.id === savedReportId)
-            if (found) setSelected(found)
-          }
-        }
-      } catch { /* ignore */ }
-      setReviewingPortfolio(false)
-    }
-  }
-
-  async function runDiscovery() {
-    if (!discoveryIdea.trim() || discovering) return
-    setDiscovering(true)
-    setDiscoveryStream('')
-    setDiscoverySaved(false)
-    setDiscoveryError(null)
-    // 스트리밍 전 현재 보고서 ID 목록 기억 (신규 보고서 감지용)
-    const prevIds = new Set(reports.map(r => r.id))
-    let savedReportId: string | undefined
-    let hadDiscoveryError = false
-    try {
-      const res = await fetch('/api/reports/discovery', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea: discoveryIdea, lens: discoveryLens }),
-      })
-      if (!res.ok || !res.body) throw new Error('discovery request failed')
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const data of parseSseEvents(lines.join('\n'))) {
-          if (data.type === 'chunk' && typeof data.text === 'string') {
-            setDiscoveryStream((prev) => prev + data.text)
-            if (discoveryRef.current) {
-              discoveryRef.current.scrollTop = discoveryRef.current.scrollHeight
-            }
-          } else if ((data.type === 'saved' || data.type === 'done') && typeof data.report_id === 'string') {
-            savedReportId = data.report_id
-            setDiscoverySaved(true)
-          } else if (data.type === 'error' && typeof data.message === 'string') {
-            hadDiscoveryError = true
-            setDiscoveryError(data.message)
-          }
-        }
-        if (done) break
-      }
-      for (const data of parseSseEvents(buffer)) {
-        if ((data.type === 'saved' || data.type === 'done') && typeof data.report_id === 'string') {
-          savedReportId = data.report_id
-          setDiscoverySaved(true)
-        } else if (data.type === 'error' && typeof data.message === 'string') {
-          hadDiscoveryError = true
-          setDiscoveryError(data.message)
-        }
-      }
-    } catch (e) {
-      console.error(e)
-      hadDiscoveryError = true
-      setDiscoveryError('종목 탐색 요청 중 오류가 발생했습니다.')
-    } finally {
-      // 스트림 종료 후 목록 갱신 — saved 이벤트 수신 여부와 무관하게 신규 보고서 감지
-      try {
-        const res2 = await fetch('/api/reports')
-        if (res2.ok) {
-          const updated: Report[] = await res2.json()
-          setReports(updated)
-          // saved 이벤트로 id를 알면 직접 찾고, 모르면 새로 생긴 discovery 보고서를 찾음
-          const newReport = savedReportId
-            ? updated.find(r => r.id === savedReportId)
-            : updated.find(r => r.type === 'discovery' && !prevIds.has(r.id))
-          if (newReport) {
-            setSelected(newReport)
-            setDiscoverySaved(true)
-            setDiscoveryError(null)
-          } else if (!savedReportId && !hadDiscoveryError) {
-            setDiscoveryError('보고서가 저장되지 않았습니다. 백엔드 로그 확인이 필요합니다.')
-          }
-        }
-      } catch { /* ignore */ }
-      setDiscovering(false)
     }
   }
 
@@ -833,40 +803,26 @@ export default function ReportsPage() {
             </div>
             <div className="flex items-center gap-1.5 flex-wrap justify-end">
               <ThemeControls />
-              <button
-                onClick={runPortfolioReview}
-                disabled={reviewingPortfolio}
-                className="flex items-center gap-1.5 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors"
-              >
-                {reviewingPortfolio
-                  ? <><Loader2 size={13} className="animate-spin" /> <span className="hidden sm:inline">점검 중...</span></>
-                  : <><BarChart2 size={13} /> <span className="hidden xs:inline sm:inline">포트폴리오</span><span className="sm:hidden">점검</span><span className="hidden sm:inline"> 점검</span></>
-                }
-              </button>
-              <button
-                onClick={() => { setShowDiscovery((v) => !v); setDiscoveryStream('') }}
-                className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-medium px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors"
-              >
-                <Search size={13} /> 종목탐색
-              </button>
+              <CopyPromptButton
+                type="portfolio_review"
+                label={<><BarChart2 size={13} /><span className="hidden sm:inline">포트폴리오 점검 프롬프트</span><span className="sm:hidden">점검 프롬프트</span></>}
+                title="포트폴리오 점검 프롬프트"
+                className="bg-cyan-700 hover:bg-cyan-600"
+              />
+              <CopyPromptButton
+                type="discovery"
+                label={<><Copy size={13} /><span className="hidden sm:inline">종목 탐색 프롬프트</span><span className="sm:hidden">탐색 프롬프트</span></>}
+                title="종목 탐색 프롬프트"
+                className="bg-emerald-700 hover:bg-emerald-600"
+              />
               <button
                 onClick={triggerMacro}
                 disabled={triggeringMacro}
                 className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors"
               >
                 {triggeringMacro
-                  ? <><Loader2 size={13} className="animate-spin" /></>
+                  ? <Loader2 size={13} className="animate-spin" />
                   : <><RefreshCw size={13} /> 매크로</>
-                }
-              </button>
-              <button
-                onClick={triggerBriefing}
-                disabled={triggering}
-                className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors"
-              >
-                {triggering
-                  ? <><Loader2 size={13} className="animate-spin" /></>
-                  : <><RefreshCw size={13} /> 브리핑</>
                 }
               </button>
             </div>
@@ -874,107 +830,10 @@ export default function ReportsPage() {
         </div>
       </header>
 
-      {showPortfolioStream && (portfolioReviewStream || reviewingPortfolio) && (
-        <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900">
-          <div className="max-w-[1400px] mx-auto px-3 sm:px-6 py-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-cyan-600 dark:text-cyan-400 font-medium">포트폴리오 점검 진행 중...</span>
-              {!reviewingPortfolio && (
-                <button
-                  onClick={() => setShowPortfolioStream(false)}
-                  className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  닫기
-                </button>
-              )}
-            </div>
-            <div
-              ref={portfolioReviewRef}
-              className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg p-4 max-h-64 overflow-y-auto"
-            >
-              <pre className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
-                {portfolioReviewStream || ''}
-                {reviewingPortfolio && <span className="animate-pulse">▊</span>}
-              </pre>
-            </div>
-            {!reviewingPortfolio && portfolioReviewStream && (
-              <p className="text-xs text-cyan-600 dark:text-cyan-400">완료 — 보고서 목록에 저장됨</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {showDiscovery && (
-        <div className="border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900">
-          <div className="max-w-[1400px] mx-auto px-3 sm:px-6 py-5 space-y-3">
-            <p className="text-sm text-gray-500 dark:text-gray-400">투자 아이디어를 입력하면 미국·한국 유망 종목을 탐색합니다.</p>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">탐색 렌즈</label>
-              <select
-                value={discoveryLens}
-                onChange={(e) => setDiscoveryLens(e.target.value)}
-                disabled={discovering}
-                className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-emerald-500 dark:focus:border-emerald-600 disabled:opacity-50"
-              >
-                <option value="다양하게">다양하게 (혼합)</option>
-                <option value="compounding">Compounding — 지속 복리 성장</option>
-                <option value="growth">Growth — 고성장 초기 기업</option>
-                <option value="asset-play">Asset Play — 저평가 자산</option>
-                <option value="turnaround">Turnaround — 회복 촉매</option>
-                <option value="cyclical">Cyclical — 사이클 저점</option>
-                <option value="special-situation">Special Situation — 이벤트 드리븐</option>
-              </select>
-            </div>
-            <textarea
-              value={discoveryIdea}
-              onChange={(e) => setDiscoveryIdea(e.target.value)}
-              placeholder="예: AI 인프라 수요 급증에서 소외된 수혜주, 고령화 사회 헬스케어 중 재무 건전한 기업, 미국 리쇼어링 수혜 산업재..."
-              rows={3}
-              disabled={discovering}
-              className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 resize-none focus:outline-none focus:border-emerald-500 dark:focus:border-emerald-600 disabled:opacity-50"
-            />
-            <div className="flex items-center gap-3">
-              <button
-                onClick={runDiscovery}
-                disabled={discovering || !discoveryIdea.trim()}
-                className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
-              >
-                {discovering
-                  ? <><Loader2 size={14} className="animate-spin" /> 탐색 중...</>
-                  : <><Search size={14} /> 종목 탐색 시작</>
-                }
-              </button>
-              {discoveryStream && !discovering && (
-                <span className={`text-xs ${discoveryError ? 'text-rose-600 dark:text-rose-400' : discoverySaved ? 'text-emerald-600 dark:text-emerald-400' : 'text-yellow-500'}`}>
-                  {discoveryError
-                    ? `오류 — ${discoveryError}`
-                    : discoverySaved
-                    ? '완료 — 보고서 목록에 저장됨'
-                    : '완료 — 저장 확인 중...'}
-                </span>
-              )}
-            </div>
-            {(discoveryStream || discovering) && (
-              <div
-                ref={discoveryRef}
-                className="mt-2 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg p-4 max-h-80 overflow-y-auto"
-              >
-                <pre className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
-                  {discoveryStream || ''}
-                  {discovering && <span className="animate-pulse">▊</span>}
-                </pre>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       <main className="max-w-[1400px] mx-auto px-3 sm:px-6 py-4 sm:py-8">
-        {/* 모바일/태블릿(<1024px): 목록 또는 본문 전환. 데스크탑(1024px+): 사이드바 레이아웃 */}
         <div className="lg:flex lg:gap-6">
-          {/* 목록 — lg 미만에서는 detail 볼 때 숨김, 데스크탑에서는 sidebarCollapsed로 접기 */}
+          {/* 목록 */}
           <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-in-out ${mobileShowDetail ? 'hidden lg:block' : 'block'} ${sidebarCollapsed ? 'lg:w-0' : 'lg:w-72'}`}>
-            {/* 종류 필터 탭 */}
             {!loading && reports.length > 0 && (
               <div className="flex gap-1 overflow-x-auto pb-2 mb-3 scrollbar-hide">
                 <button
@@ -1007,7 +866,6 @@ export default function ReportsPage() {
               </div>
             )}
 
-            {/* 멀티셀렉트 액션 바 */}
             {filteredReports.length > 0 && (
               <div className="flex items-center gap-2 mb-2 px-1">
                 <input
@@ -1042,6 +900,7 @@ export default function ReportsPage() {
             {!loading && filteredReports.length === 0 && reports.length > 0 && (
               <p className="text-gray-500 dark:text-gray-600 text-sm text-center py-6">해당 종류의 보고서가 없습니다.</p>
             )}
+
             <div className="space-y-2">
               {filteredReports.map((r) => {
                 const isLatest = reports.findIndex(x => x.ticker_id === r.ticker_id && x.type === r.type) === reports.indexOf(r)
@@ -1057,11 +916,7 @@ export default function ReportsPage() {
                         : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700'
                     }`}
                   >
-                    {/* 체크박스 */}
-                    <div
-                      className="flex items-center pl-3 pr-1 cursor-pointer"
-                      onClick={(e) => toggleSelect(r.id, e)}
-                    >
+                    <div className="flex items-center pl-3 pr-1 cursor-pointer" onClick={(e) => toggleSelect(r.id, e)}>
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -1069,11 +924,7 @@ export default function ReportsPage() {
                         className="w-3.5 h-3.5 rounded border-gray-400 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 accent-blue-500 pointer-events-none"
                       />
                     </div>
-                    {/* 내용 */}
-                    <button
-                      className="flex-1 text-left px-3 py-3 min-w-0"
-                      onClick={() => selectReport(r)}
-                    >
+                    <button className="flex-1 text-left px-3 py-3 min-w-0" onClick={() => selectReport(r)}>
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         {!r.is_read && (
                           <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" title="읽지 않음" />
@@ -1109,11 +960,10 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          {/* 본문 — lg 미만에서는 목록 볼 때 숨김 */}
+          {/* 본문 */}
           <div className={`flex-1 min-w-0 ${mobileShowDetail ? 'block' : 'hidden lg:block'}`}>
             {selected ? (
               <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
-                {/* 상세 헤더 */}
                 <div className="flex items-center gap-2 px-4 sm:px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex-wrap">
                   <button
                     onClick={() => setMobileShowDetail(false)}
@@ -1151,7 +1001,6 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                {/* 보고서 본문 */}
                 <div className={`p-4 sm:p-6 fs-${fontSize}`}>
                   {selected.type === 'analysis'
                     ? <DeepReportView report={selected} />
@@ -1162,12 +1011,11 @@ export default function ReportsPage() {
                     : selected.type === 'macro'
                     ? <MacroReportView report={selected} />
                     : selected.type === 'daily_brief'
-                    ? <DailyBriefingView report={selected} />
+                    ? <BriefingView report={selected} />
                     : <Markdown content={selected.content} />
                   }
                 </div>
 
-                {/* 코멘트 섹션 */}
                 <div className="border-t border-gray-200 dark:border-gray-800">
                   <button
                     onClick={toggleComments}
@@ -1183,7 +1031,6 @@ export default function ReportsPage() {
 
                   {showComments && (
                     <div className="px-4 sm:px-6 pb-5 space-y-4">
-                      {/* 기존 코멘트 */}
                       {commentsLoading ? (
                         <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500 text-sm py-2">
                           <Loader2 size={13} className="animate-spin" /> 불러오는 중...
@@ -1209,7 +1056,6 @@ export default function ReportsPage() {
                         <p className="text-xs text-gray-500 dark:text-gray-600 py-1">아직 코멘트가 없습니다.</p>
                       )}
 
-                      {/* 코멘트 입력 */}
                       <div className="flex gap-2">
                         <textarea
                           value={commentText}

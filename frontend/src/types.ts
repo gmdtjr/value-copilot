@@ -1,6 +1,6 @@
 export type Market = 'US_Stock' | 'KR_Stock'
 export type TickerStatus = 'portfolio' | 'watchlist'
-export type ThesisStatus = 'draft' | 'confirmed' | 'needs_review'
+export type ThesisStatus = 'draft' | 'confirmed' | 'needs_review' | 'retired'
 export type StockType = 'compounding' | 'growth' | 'asset_play' | 'turnaround' | 'cyclical' | 'special_situation'
 
 export interface Ticker {
@@ -33,6 +33,13 @@ export interface Thesis {
   last_analyzed_at: string | null
   stock_type: StockType | null
   seed_memo: string | null
+  // Phase 2
+  version_number: number
+  parent_version_id: string | null
+  key_logic: string | null
+  exploration_note: string | null
+  retired_at: string | null
+  retirement_reason: string | null
 }
 
 export interface SecSummary {
@@ -71,3 +78,29 @@ export type SseEvent =
   | { type: 'chunk'; text: string }
   | { type: 'complete'; sections: Record<string, string> }
   | { type: 'error'; message: string }
+
+export type ConversationImportType = 'discovery' | 'thesis_challenge' | 'portfolio_review' | 'deep_analysis'
+
+export interface ConversationImport {
+  id: string
+  ticker_id: string | null
+  ticker_symbol: string | null
+  ticker_name: string | null
+  import_type: ConversationImportType
+  summary: string
+  raw_excerpt: string | null
+  created_at: string
+}
+
+export type HumanResponseType = 'agree' | 'disagree' | 'partial' | 'override' | 'note'
+export type HumanResponseTargetType = 'report' | 'thesis' | 'break_signal' | 'retrospective'
+
+export interface HumanResponse {
+  id: string
+  target_type: HumanResponseTargetType
+  target_id: string
+  section_key: string | null
+  response_type: HumanResponseType
+  content: string
+  recorded_at: string
+}

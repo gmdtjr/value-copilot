@@ -38,11 +38,31 @@ export const api = {
     return res.json()
   },
 
-  async confirmThesis(tickerId: string): Promise<Thesis> {
+  async confirmThesis(tickerId: string, keyLogic?: string): Promise<Thesis> {
     const res = await fetch(`${BASE}/thesis/${tickerId}/confirm`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key_logic: keyLogic ?? null }),
     })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
+    return res.json()
+  },
+
+  async getThesisVersions(tickerId: string): Promise<Thesis[]> {
+    const res = await fetch(`${BASE}/thesis/${tickerId}/versions`)
     if (!res.ok) throw new Error(await res.text())
+    return res.json()
+  },
+
+  async createNewVersion(tickerId: string): Promise<Thesis> {
+    const res = await fetch(`${BASE}/thesis/${tickerId}/new-version`, { method: 'POST' })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
     return res.json()
   },
 
@@ -147,7 +167,7 @@ export const api = {
    */
   analyzeStream(
     tickerId: string,
-    body: { stock_type: string; seed_memo: string },
+    body: { stock_type: string; seed_memo: string; exploration_note?: string },
     callbacks: {
       onStart?: (symbol: string) => void
       onChunk: (text: string) => void

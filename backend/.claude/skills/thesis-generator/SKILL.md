@@ -32,6 +32,7 @@ description: |
 <section name="risk">...</section>
 <section name="key_assumptions">...</section>
 <section name="valuation">...</section>
+<section name="key_logic">...</section>
 ```
 
 ---
@@ -64,3 +65,10 @@ description: |
 - 재무 데이터가 있으면 실제 수치 기반으로 계산
 - 데이터가 없으면 방법론과 필요한 가정만 명시 ("데이터 수집 필요")
 - 현재 시장가 대비 괴리 추정 (가능한 경우)
+
+### 5. key_logic (핵심 논리)
+- **"이 논리가 깨지면 thesis가 무너진다"는 한 단락**
+- 150~250자 이내. 간결하고 구체적으로.
+- 형식: "[핵심 전제]가 유효한 한 이 thesis는 성립한다. 만약 [구체적 조건/사건]이 발생한다면 thesis를 즉시 재검토해야 한다."
+- 예시: "NVDA의 AI 학습 수요가 향후 3년간 연간 30%+ 성장을 유지하는 것이 핵심 전제다. 만약 주요 CSP(AWS/Azure/GCP)가 자체 AI 칩으로 전환하거나 학습 효율이 급격히 개선되어 GPU 수요가 정체된다면 thesis를 즉시 재검토해야 한다."
+- 측정 가능한 구체적 조건을 포함하세요. 모호한 "비즈니스가 나빠지면"은 피하세요.

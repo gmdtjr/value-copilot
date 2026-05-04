@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Sparkles, CheckCircle, AlertTriangle,
   ChevronDown, ChevronUp, Loader2, FileText, Bell, MessageSquare, RefreshCw,
-  Database, BarChart2, ExternalLink, Trash2, Link,
+  Database, BarChart2, ExternalLink, Trash2, Link, GitBranch, Key,
+  Globe, Clock, Copy, Check, X, Search,
 } from 'lucide-react'
 import { api } from '../api'
 import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
 import { ThemeControls } from '../components/ThemeControls'
 import { useTheme } from '../contexts/ThemeContext'
-import type { Thesis, Ticker, FinancialData, SecSummary } from '../types'
+import type { Thesis, Ticker, FinancialData, SecSummary, ConversationImport } from '../types'
 
 
 type DataStatus = {
@@ -30,7 +31,7 @@ const THESIS_SECTIONS = [
 type ThesisSectionKey = (typeof THESIS_SECTIONS)[number]['key']
 type AnalyzeState = 'idle' | 'streaming' | 'done' | 'error'
 type RefineState = 'idle' | 'streaming' | 'done' | 'error'
-type ActiveTab = 'thesis' | 'data' | 'reports'
+type ActiveTab = 'thesis' | 'data' | 'reports' | 'versions'
 
 const STOCK_TYPE_OPTIONS = [
   {
@@ -93,6 +94,352 @@ const SEED_MEMO_PLACEHOLDER: Record<string, string> = {
   turnaround: '이 종목을 Turnaround로 보는 이유를 작성하세요.\n\n예: 전임 CEO의 무분별한 M&A로 부채가 쌓였으나, 새 경영진이 자산 매각과 비용 절감을 선언했다. 현금 runway는 18개월이고, 핵심 사업 자체는 흑자다. 구조조정 완료 시 정상화 이익이 현재 EV 대비...',
   cyclical: '이 종목을 Cyclical로 보는 이유를 작성하세요.\n\n예: 이 업종의 평균 마진은 역대 15%인데 현재 3%에 불과하다. 재고가 줄기 시작했고 설비투자는 2년째 감소 중이다. 부채/EBITDA가 2배 수준으로 사이클 저점을 버틸 수 있다. 정상화 시 이익은 현재의...',
   special_situation: '이 종목을 Special Situation으로 보는 이유를 작성하세요.\n\n예: A사가 B사 인수를 발표했고 주당 X달러를 제시했다. 현재 주가는 Y달러로 Z% 스프레드가 있다. 규제 리스크가 낮고 양사 이사회가 모두 찬성했다. 완료 예상 시점은 N개월 후...',
+}
+
+// ── TickerPromptButton (Step 3/4 외부 탐색) ───────────────────────────────────
+
+function TickerPromptModal({ text, title, onClose }: { text: string; title: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const taRef = useRef<HTMLTextAreaElement>(null)
+
+  async function doCopy() {
+    try {
+      if (navigator.clipboard) await navigator.clipboard.writeText(text)
+      else { taRef.current?.select(); document.execCommand('copy') }
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+      <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-2xl p-5 space-y-4 max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between">
+          <h2 className="text-gray-900 dark:text-white font-semibold text-base">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+            <X size={18} />
+          </button>
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          아래 텍스트를 복사해서 외부 Claude에 붙여넣으세요. 탐색 후 결과를 Journal → 탐색결과 탭에 기록하세요.
+        </p>
+        <textarea
+          ref={taRef}
+          readOnly
+          value={text}
+          onClick={() => taRef.current?.select()}
+          rows={16}
+          className="flex-1 w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-700 dark:text-gray-200 font-mono resize-none focus:outline-none cursor-pointer"
+        />
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">닫기</button>
+          <button
+            onClick={doCopy}
+            className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            {copied ? <><Check size={14} /> 복사됨!</> : <><Copy size={14} /> 전체 복사</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TickerPromptButton({
+  tickerId,
+  promptType,
+  label,
+  title,
+  className,
+}: {
+  tickerId: string
+  promptType: string
+  label: ReactNode
+  title: string
+  className: string
+}) {
+  const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [promptText, setPromptText] = useState<string | null>(null)
+
+  async function fetchPrompt() {
+    if (state === 'loading') return
+    setState('loading')
+    setPromptText(null)
+    try {
+      const res = await fetch(`/api/tickers/${tickerId}/explore-prompt?type=${promptType}`)
+      if (!res.ok) { setState('error'); setTimeout(() => setState('idle'), 3000); return }
+      const { prompt } = await res.json()
+
+      if (navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(prompt)
+          setState('idle')
+          // 복사 성공이면 그냥 모달 없이 토스트처럼 — 하지만 모달도 열어서 내용 확인 가능하게
+          setPromptText(prompt)
+          return
+        } catch { /* fallthrough */ }
+      }
+      setPromptText(prompt)
+      setState('idle')
+    } catch {
+      setState('error')
+      setTimeout(() => setState('idle'), 3000)
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={fetchPrompt}
+        disabled={state === 'loading'}
+        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors disabled:opacity-50 ${className}`}
+      >
+        {state === 'loading'
+          ? <Loader2 size={12} className="animate-spin" />
+          : state === 'error'
+          ? <><X size={12} /> 오류</>
+          : <>{label}</>
+        }
+      </button>
+      {promptText && (
+        <TickerPromptModal
+          text={promptText}
+          title={title}
+          onClose={() => setPromptText(null)}
+        />
+      )}
+    </>
+  )
+}
+
+// ── TickerConvImports (종목별 탐색 기록) ──────────────────────────────────────
+
+const CONV_TYPE_LABEL: Record<string, string> = {
+  discovery:        '종목 탐색',
+  thesis_challenge: '반대 논거',
+  portfolio_review: '포트폴리오',
+  deep_analysis:    '심층 분석',
+}
+const CONV_TYPE_COLOR: Record<string, string> = {
+  discovery:        'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  thesis_challenge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  portfolio_review: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
+  deep_analysis:    'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+}
+
+function TickerConvImports({
+  items,
+  loaded,
+  onRefresh,
+  onDelete,
+}: {
+  items: ConversationImport[]
+  loaded: boolean
+  onRefresh: () => void
+  onDelete: (id: string) => Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+
+  function toggleItem(id: string) {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  return (
+    <div className="mt-3 border-t border-gray-200 dark:border-gray-700 pt-3">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="flex items-center gap-2 flex-1 text-left"
+        >
+          <Globe size={12} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+            이 종목 탐색 기록
+          </span>
+          {!loaded
+            ? <Loader2 size={11} className="animate-spin text-gray-400" />
+            : items.length > 0
+            ? <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300 px-1.5 py-0 rounded-full leading-5 font-medium">{items.length}</span>
+            : <span className="text-xs text-gray-400 dark:text-gray-600">없음</span>
+          }
+          {loaded && items.length > 0 && (
+            expanded
+              ? <ChevronUp size={13} className="text-gray-400 dark:text-gray-500" />
+              : <ChevronDown size={13} className="text-gray-400 dark:text-gray-500" />
+          )}
+        </button>
+        <button
+          onClick={onRefresh}
+          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+          title="새로고침"
+        >
+          <RefreshCw size={11} />
+        </button>
+      </div>
+
+      {expanded && items.length > 0 && (
+        <div className="mt-2 space-y-2">
+          {items.map(item => {
+            const isOpen = expandedIds.has(item.id)
+            const typeColor = CONV_TYPE_COLOR[item.import_type] ?? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+            const typeLabel = CONV_TYPE_LABEL[item.import_type] ?? item.import_type
+            return (
+              <div key={item.id} className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg p-3">
+                <div className="flex items-start gap-2">
+                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${typeColor}`}>
+                    {typeLabel}
+                  </span>
+                  <p className="text-xs text-gray-700 dark:text-gray-200 leading-relaxed flex-1">
+                    {item.summary}
+                  </p>
+                  <button
+                    onClick={() => onDelete(item.id)}
+                    className="text-gray-300 dark:text-gray-700 hover:text-red-400 transition-colors flex-shrink-0"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <span className="text-xs text-gray-400 dark:text-gray-600">{fmtKST(item.created_at)}</span>
+                  {item.raw_excerpt && (
+                    <button
+                      onClick={() => toggleItem(item.id)}
+                      className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-0.5"
+                    >
+                      {isOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                      원문
+                    </button>
+                  )}
+                </div>
+                {isOpen && item.raw_excerpt && (
+                  <div className="mt-2 bg-gray-50 dark:bg-gray-900 rounded px-2 py-2">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed whitespace-pre-wrap font-mono">{item.raw_excerpt}</p>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <p className="text-xs text-gray-400 dark:text-gray-600 text-center pt-1">
+            Journal → 탐색결과 탭에서 이 종목으로 기록된 항목이 표시됩니다.
+          </p>
+        </div>
+      )}
+
+      {loaded && items.length === 0 && (
+        <p className="mt-1.5 text-xs text-gray-400 dark:text-gray-600">
+          Journal → 탐색결과 탭에서 이 종목을 선택하여 기록하세요.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── KeyLogicCard ──────────────────────────────────────────────────────────────
+
+function KeyLogicCard({
+  thesis,
+  onSave,
+}: {
+  thesis: Thesis | null
+  onSave: (kl: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(thesis?.key_logic ?? '')
+  const [saving, setSaving] = useState(false)
+
+  // 상위 thesis가 바뀌면 text 동기화
+  useEffect(() => {
+    if (!editing) setText(thesis?.key_logic ?? '')
+  }, [thesis?.key_logic, editing])
+
+  const isConfirmed = thesis?.confirmed === 'confirmed'
+  const hasKeyLogic = !!(thesis?.key_logic?.trim())
+
+  async function save() {
+    if (!text.trim()) return
+    setSaving(true)
+    try {
+      await onSave(text.trim())
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className={`border rounded-xl p-4 space-y-2 ${
+      hasKeyLogic
+        ? 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800'
+        : 'bg-amber-900/10 border-amber-700/50'
+    }`}>
+      <div className="flex items-center gap-2">
+        <Key size={14} className={hasKeyLogic ? 'text-violet-400' : 'text-amber-500'} />
+        <span className="text-sm font-medium text-gray-900 dark:text-white">핵심 논리 (Key Logic)</span>
+        {!hasKeyLogic && (
+          <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+            Confirm 전 필수
+          </span>
+        )}
+        {hasKeyLogic && !isConfirmed && !editing && (
+          <button
+            onClick={() => { setText(thesis?.key_logic ?? ''); setEditing(true) }}
+            className="ml-auto text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          >
+            수정
+          </button>
+        )}
+      </div>
+
+      {!editing && hasKeyLogic ? (
+        <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap border-l-2 border-violet-400 pl-3">
+          {thesis!.key_logic}
+        </p>
+      ) : !editing ? (
+        <button
+          onClick={() => { setText(''); setEditing(true) }}
+          className="text-sm text-amber-600 dark:text-amber-400 hover:text-amber-500 transition-colors"
+        >
+          "이 논리가 깨지면 thesis가 무너진다"는 한 단락을 직접 작성하거나 AI 분석 후 자동 생성됩니다. 클릭하여 입력.
+        </button>
+      ) : null}
+
+      {editing && (
+        <div className="space-y-2">
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save() }}
+            placeholder='예: "NVDA의 AI 학습 수요가 연간 30%+ 성장을 유지하는 것이 핵심 전제다. 만약 주요 CSP가 자체 칩으로 전환한다면 thesis를 즉시 재검토해야 한다."'
+            rows={4}
+            autoFocus
+            disabled={saving}
+            className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600 disabled:opacity-50"
+          />
+          <p className="text-xs text-gray-400 dark:text-gray-500">⌘Enter 저장 · 150~250자 권장</p>
+          <div className="flex gap-2">
+            <button
+              onClick={save}
+              disabled={saving || !text.trim()}
+              className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+            >
+              {saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+              저장
+            </button>
+            <button
+              onClick={() => { setEditing(false); setText(thesis?.key_logic ?? '') }}
+              className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Ticker Reports Tab ────────────────────────────────────────────────────────
@@ -242,7 +589,7 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 
 function DataSection({
   title, defaultOpen = false, children,
-}: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+}: { title: string; defaultOpen?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
@@ -465,6 +812,20 @@ export default function ThesisPage() {
   const [showAnalyzeModal, setShowAnalyzeModal] = useState(false)
   const [modalStockType, setModalStockType] = useState('compounding')
   const [modalSeedMemo, setModalSeedMemo] = useState('')
+  const [modalExplorationNote, setModalExplorationNote] = useState('')
+
+  // key_logic confirm flow
+  const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [confirmKeyLogic, setConfirmKeyLogic] = useState('')
+
+  // version history
+  const [versions, setVersions] = useState<Thesis[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsLoaded, setVersionsLoaded] = useState(false)
+
+  // 종목별 탐색 기록
+  const [convImports, setConvImports] = useState<ConversationImport[]>([])
+  const [convLoaded, setConvLoaded] = useState(false)
   const [openSections, setOpenSections] = useState<Set<ThesisSectionKey>>(new Set(['thesis']))
   const [reporting, setReporting] = useState(false)
   const [reportMsg, setReportMsg] = useState('')
@@ -486,6 +847,10 @@ export default function ThesisPage() {
   const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    if (activeTab === 'versions' && !versionsLoaded) loadVersionHistory()
+  }, [activeTab])
+
+  useEffect(() => {
     if (!id) return
     Promise.all([
       api.getTickers().then((list) => list.find((t) => t.id === id) ?? null),
@@ -497,6 +862,8 @@ export default function ThesisPage() {
         setThesis(th)
         setDataStatus(ds)
         setValleyUrl(t?.valley_url ?? null)
+        // 탐색 기록은 백그라운드에서 로드
+        if (id) loadConvImports(id)
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -538,6 +905,7 @@ export default function ThesisPage() {
   function openAnalyzeModal() {
     setModalStockType(thesis?.stock_type ?? 'compounding')
     setModalSeedMemo('')
+    setModalExplorationNote('')
     setShowAnalyzeModal(true)
   }
 
@@ -551,7 +919,7 @@ export default function ThesisPage() {
 
     abortRef.current = api.analyzeStream(
       id,
-      { stock_type: modalStockType, seed_memo: modalSeedMemo },
+      { stock_type: modalStockType, seed_memo: modalSeedMemo, exploration_note: modalExplorationNote || undefined },
       {
         onStart: () => setStreamText(''),
         onChunk: (text) => setStreamText((prev) => prev + text),
@@ -681,13 +1049,61 @@ export default function ThesisPage() {
     }
   }
 
+  function openConfirmModal() {
+    if (!id) return
+    setConfirmKeyLogic(thesis?.key_logic ?? '')
+    setShowConfirmModal(true)
+  }
+
   async function handleConfirm() {
     if (!id) return
+    if (!thesis?.key_logic && !confirmKeyLogic.trim()) {
+      // key_logic이 없으면 모달 열기
+      openConfirmModal()
+      return
+    }
     try {
-      const updated = await api.confirmThesis(id)
+      const updated = await api.confirmThesis(id, confirmKeyLogic.trim() || undefined)
       setThesis(updated)
+      setShowConfirmModal(false)
+      setVersionsLoaded(false) // version history 캐시 무효화
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : '오류 발생')
+    }
+  }
+
+  async function handleCreateNewVersion() {
+    if (!id) return
+    try {
+      const newVersion = await api.createNewVersion(id)
+      setThesis(newVersion)
+      setVersionsLoaded(false)
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : '오류 발생')
+    }
+  }
+
+  async function loadConvImports(tickerId: string) {
+    setConvLoaded(false)
+    try {
+      const res = await fetch(`/api/conversations?ticker_id=${tickerId}`)
+      if (res.ok) setConvImports(await res.json())
+    } catch { /* ignore */ } finally {
+      setConvLoaded(true)
+    }
+  }
+
+  async function loadVersionHistory() {
+    if (!id || versionsLoaded) return
+    setVersionsLoading(true)
+    try {
+      const data = await api.getThesisVersions(id)
+      setVersions(data)
+      setVersionsLoaded(true)
+    } catch {
+      // ignore
+    } finally {
+      setVersionsLoading(false)
     }
   }
 
@@ -700,15 +1116,17 @@ export default function ThesisPage() {
     })
   }
 
-  const statusColor = {
+  const statusColor: Record<string, string> = {
     draft: 'text-yellow-600 dark:text-yellow-400',
     confirmed: 'text-emerald-600 dark:text-emerald-400',
     needs_review: 'text-red-600 dark:text-red-400',
+    retired: 'text-gray-500 dark:text-gray-500',
   }
-  const statusLabel = {
+  const statusLabel: Record<string, string> = {
     draft: '초안 (Draft)',
     confirmed: '확정됨 (Confirmed)',
     needs_review: '재검토 필요',
+    retired: '아카이브됨',
   }
 
   if (loading) {
@@ -742,8 +1160,13 @@ export default function ThesisPage() {
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-gray-900 dark:text-white text-lg sm:text-xl font-bold">{ticker.name}</span>
                 {thesis && (
-                  <span className={`text-xs sm:text-sm font-medium ${statusColor[thesis.confirmed]}`}>
-                    {statusLabel[thesis.confirmed]}
+                  <span className={`text-xs sm:text-sm font-medium ${statusColor[thesis.confirmed] ?? 'text-gray-500'}`}>
+                    {statusLabel[thesis.confirmed] ?? thesis.confirmed}
+                  </span>
+                )}
+                {thesis && thesis.version_number > 1 && (
+                  <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300">
+                    v{thesis.version_number}
                   </span>
                 )}
               </div>
@@ -791,6 +1214,15 @@ export default function ThesisPage() {
               <Trash2 size={14} />
               <span className="hidden sm:inline">삭제</span>
             </button>
+            {thesis?.confirmed === 'confirmed' && (
+              <button
+                onClick={handleCreateNewVersion}
+                title="현재 confirmed thesis를 복사하여 새 draft 버전 생성"
+                className="flex items-center gap-1.5 bg-gray-200 dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-900 dark:text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+              >
+                <GitBranch size={14} /> <span className="hidden sm:inline">새 버전</span>
+              </button>
+            )}
             {(thesis?.confirmed === 'draft' || thesis?.confirmed === 'needs_review') && hasContent && (
               <button
                 onClick={handleConfirm}
@@ -865,6 +1297,7 @@ export default function ThesisPage() {
             { id: 'thesis', label: 'Thesis', icon: <Sparkles size={14} /> },
             { id: 'data', label: '재무 데이터', icon: <BarChart2 size={14} /> },
             { id: 'reports', label: '보고서', icon: <FileText size={14} /> },
+            { id: 'versions', label: '버전 히스토리', icon: <GitBranch size={14} /> },
           ] as const).map((tab) => (
             <button
               key={tab.id}
@@ -945,12 +1378,55 @@ export default function ThesisPage() {
               </div>
             )}
 
+            {/* 외부 탐색 도구 (Step 3: 심층 분석 / Step 4: 반대 논거) */}
+            {id && analyzeState === 'idle' && (
+              <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Globe size={14} className="text-blue-400 flex-shrink-0" />
+                  <span className="text-xs font-medium text-gray-600 dark:text-gray-300">외부 탐색 도구</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">— 결과는 Journal → 탐색결과 탭에 기록하세요</span>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <TickerPromptButton
+                    tickerId={id}
+                    promptType="deep_analysis"
+                    label={<><Search size={12} /> 심층 분석 프롬프트</>}
+                    title={`${ticker?.name ?? ''} 종목 집중 분석 프롬프트`}
+                    className="bg-blue-900/20 border-blue-700/50 text-blue-600 dark:text-blue-300 hover:bg-blue-900/40"
+                  />
+                  <TickerPromptButton
+                    tickerId={id}
+                    promptType="thesis_challenge"
+                    label={<><AlertTriangle size={12} /> 반대 논거 탐색 프롬프트</>}
+                    title={`${ticker?.name ?? ''} 반대 논거 탐색 프롬프트`}
+                    className="bg-red-900/20 border-red-700/50 text-red-600 dark:text-red-300 hover:bg-red-900/40"
+                  />
+                </div>
+                {!hasContent && (
+                  <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
+                    보고서를 읽은 후 위 프롬프트로 외부 Claude와 분석 → seed_memo 초안 형성 → "AI 분석"으로 Thesis 작성
+                  </p>
+                )}
+
+                {/* 이 종목의 탐색 기록 — 항상 표시 */}
+                <TickerConvImports
+                  items={convImports}
+                  loaded={convLoaded}
+                  onRefresh={() => { if (id) loadConvImports(id) }}
+                  onDelete={async (itemId) => {
+                    await fetch(`/api/conversations/${itemId}`, { method: 'DELETE' })
+                    setConvImports(prev => prev.filter(c => c.id !== itemId))
+                  }}
+                />
+              </div>
+            )}
+
             {/* No content yet */}
             {analyzeState === 'idle' && !hasContent && (
-              <div className="text-center py-24 text-gray-500 dark:text-gray-600">
-                <Sparkles size={48} className="mx-auto mb-4 text-gray-800" />
-                <p className="text-lg text-gray-400 dark:text-gray-500">아직 Thesis가 없습니다.</p>
-                <p className="text-sm mt-1">"AI 분석" 버튼으로 초안을 생성하세요.</p>
+              <div className="text-center py-12 text-gray-500 dark:text-gray-600">
+                <Sparkles size={40} className="mx-auto mb-3 text-gray-800" />
+                <p className="text-gray-400 dark:text-gray-500">아직 Thesis가 없습니다.</p>
+                <p className="text-sm mt-1 text-gray-500 dark:text-gray-600">보고서 생성 → 외부 탐색 → "AI 분석" 버튼으로 초안을 작성하세요.</p>
               </div>
             )}
 
@@ -996,6 +1472,29 @@ export default function ThesisPage() {
                 </div>
               )
             })}
+
+            {/* key_logic 섹션 */}
+            {hasContent && (
+              <KeyLogicCard
+                thesis={thesis}
+                onSave={async (kl) => {
+                  if (!id) return
+                  const updated = await api.patchThesis(id, { key_logic: kl })
+                  setThesis(updated)
+                }}
+              />
+            )}
+
+            {/* exploration_note */}
+            {hasContent && thesis?.exploration_note && (
+              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Globe size={14} className="text-blue-400" />
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">외부 탐색 인사이트</span>
+                </div>
+                <p className="text-sm text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{thesis.exploration_note}</p>
+              </div>
+            )}
 
             {/* Feedback loop */}
             {hasContent && thesis?.confirmed !== 'confirmed' && analyzeState !== 'streaming' && (
@@ -1051,6 +1550,79 @@ export default function ThesisPage() {
         {activeTab === 'reports' && id && (
           <TickerReportsTab tickerId={id} />
         )}
+
+        {/* ── 버전 히스토리 탭 ── */}
+        {activeTab === 'versions' && (
+          <div className="space-y-3">
+            {versionsLoading && (
+              <div className="flex items-center justify-center py-12 text-gray-400 gap-2">
+                <Loader2 size={16} className="animate-spin" /> 불러오는 중...
+              </div>
+            )}
+            {!versionsLoading && versions.length === 0 && (
+              <div className="text-center py-16 text-gray-500 dark:text-gray-600">
+                <GitBranch size={40} className="mx-auto mb-3 text-gray-700" />
+                <p>버전 기록이 없습니다.</p>
+              </div>
+            )}
+            {versions.map((v) => {
+              const isActive = v.id === thesis?.id
+              const statusC: Record<string, string> = {
+                draft: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
+                confirmed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+                needs_review: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+                retired: 'bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500',
+              }
+              const statusL: Record<string, string> = {
+                draft: 'Draft', confirmed: 'Confirmed', needs_review: '재검토', retired: '아카이브',
+              }
+              return (
+                <div
+                  key={v.id}
+                  className={`bg-gray-50 dark:bg-gray-900 border rounded-xl p-5 space-y-3 ${
+                    isActive
+                      ? 'border-violet-500 ring-1 ring-violet-500/30'
+                      : 'border-gray-200 dark:border-gray-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-sm font-bold text-gray-900 dark:text-white">
+                      v{v.version_number}
+                    </span>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusC[v.confirmed] ?? ''}`}>
+                      {statusL[v.confirmed] ?? v.confirmed}
+                    </span>
+                    {isActive && (
+                      <span className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300 px-1.5 py-0.5 rounded font-medium">현재</span>
+                    )}
+                    {v.stock_type && (
+                      <span className="text-xs text-gray-400 dark:text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">
+                        {v.stock_type}
+                      </span>
+                    )}
+                    <span className="ml-auto text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
+                      <Clock size={11} />
+                      {v.confirmed_at ? fmtKST(v.confirmed_at) : (v.last_analyzed_at ? fmtKST(v.last_analyzed_at) : '-')}
+                    </span>
+                  </div>
+                  {v.key_logic && (
+                    <div className="border-l-2 border-violet-400 pl-3">
+                      <p className="text-xs font-medium text-violet-600 dark:text-violet-400 mb-1 flex items-center gap-1">
+                        <Key size={11} /> 핵심 논리
+                      </p>
+                      <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed">{v.key_logic}</p>
+                    </div>
+                  )}
+                  {v.retired_at && v.retirement_reason && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500">
+                      아카이브 사유: {v.retirement_reason} · {fmtKST(v.retired_at)}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </main>
 
       {/* 삭제 확인 모달 */}
@@ -1082,6 +1654,50 @@ export default function ThesisPage() {
               >
                 {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                 삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* key_logic Confirm 모달 */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-md p-6 space-y-4">
+            <div>
+              <h2 className="text-gray-900 dark:text-white font-semibold text-base flex items-center gap-2">
+                <Key size={16} className="text-violet-400" /> 핵심 논리 입력 후 Confirm
+              </h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Confirm 전 "이 논리가 깨지면 thesis가 무너진다"는 핵심 한 단락을 명문화하세요.
+              </p>
+            </div>
+
+            <textarea
+              value={confirmKeyLogic}
+              onChange={e => setConfirmKeyLogic(e.target.value)}
+              placeholder='예: "매출 성장률이 분기 연속 10% 이하로 둔화되거나, 주요 고객 이탈률이 5% 이상 상승한다면 이 thesis는 재검토가 필요하다."'
+              rows={5}
+              autoFocus
+              className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
+            />
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              한 단락 · 측정 가능한 구체적 조건 포함 · 150~250자 권장
+            </p>
+
+            <div className="flex gap-3 justify-end pt-1">
+              <button
+                onClick={() => setShowConfirmModal(false)}
+                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={!confirmKeyLogic.trim()}
+                className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+              >
+                <CheckCircle size={14} /> Confirm
               </button>
             </div>
           </div>
@@ -1157,6 +1773,20 @@ export default function ThesisPage() {
                 className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
               />
               <p className="text-xs text-gray-400 dark:text-gray-500">AI는 이 관점을 기반으로 thesis를 작성합니다. 구체적일수록 결과물이 좋아집니다.</p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium flex items-center gap-1.5">
+                <Globe size={14} className="text-blue-400" /> 외부 탐색 인사이트 <span className="text-gray-400 dark:text-gray-500 font-normal">(선택)</span>
+              </label>
+              <textarea
+                value={modalExplorationNote}
+                onChange={(e) => setModalExplorationNote(e.target.value)}
+                placeholder="외부 Claude와의 탐색 결과 중 이 종목에 대한 핵심 인사이트를 붙여넣으세요..."
+                rows={3}
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-blue-500"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500">Journal의 "탐색결과"에서 가져온 인사이트나 보고서에서 건진 관점을 여기에 입력하면 thesis에 반영됩니다.</p>
             </div>
 
             <div className="flex gap-3 justify-end pt-1">

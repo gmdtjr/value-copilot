@@ -102,6 +102,7 @@ class TickerPatch(BaseModel):
 class AnalyzeBody(BaseModel):
     stock_type: str
     seed_memo: str
+    exploration_note: Optional[str] = None
 
 
 class RefineBody(BaseModel):
@@ -142,7 +143,8 @@ class TickerResponse(BaseModel):
 
 @router.get("", response_model=list[TickerResponse])
 def list_tickers(db: Session = Depends(get_db)):
-    tickers = db.query(Ticker).order_by(Ticker.created_at.desc()).all()
+    from sqlalchemy.orm import selectinload
+    tickers = db.query(Ticker).options(selectinload(Ticker.theses)).order_by(Ticker.created_at.desc()).all()
     result = []
     for t in tickers:
         p = t.portfolio
@@ -189,7 +191,7 @@ def add_ticker(body: TickerCreate, db: Session = Depends(get_db)):
     db.add(ticker)
     db.flush()
 
-    thesis = Thesis(ticker_id=ticker.id, confirmed=ThesisStatusEnum.DRAFT)
+    thesis = Thesis(ticker_id=ticker.id, confirmed=ThesisStatusEnum.DRAFT, version_number=1)
     db.add(thesis)
     db.commit()
     db.refresh(ticker)
@@ -231,8 +233,13 @@ def trigger_break_monitor(ticker_id: str, background_tasks: BackgroundTasks, db:
     ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    thesis = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
-    if not thesis or thesis.confirmed != ThesisStatusEnum.CONFIRMED:
+    thesis = (
+        db.query(Thesis)
+        .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed == ThesisStatusEnum.CONFIRMED)
+        .order_by(Thesis.version_number.desc())
+        .first()
+    )
+    if not thesis:
         raise HTTPException(status_code=400, detail="confirmed 상태의 thesis가 없습니다.")
     background_tasks.add_task(
         _run_break_monitor_task,
@@ -290,19 +297,63 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
     except Exception:
         logger.warning("SEC/DART context load failed for %s", ticker.symbol)
 
+    # Determine target thesis: create new version if current is confirmed
+    try:
+        active = (
+            db.query(Thesis)
+            .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed != ThesisStatusEnum.RETIRED)
+            .order_by(Thesis.version_number.desc())
+            .first()
+        )
+    except Exception:
+        db.rollback()
+        active = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
+    is_new_version = False
+    if active and active.confirmed == ThesisStatusEnum.CONFIRMED:
+        # Create new draft version
+        new_v = (active.version_number or 1) + 1
+        new_thesis = Thesis(
+            ticker_id=ticker.id,
+            version_number=new_v,
+            parent_version_id=active.id,
+            confirmed=ThesisStatusEnum.DRAFT,
+            stock_type=body.stock_type,
+            seed_memo=body.seed_memo,
+            exploration_note=body.exploration_note,
+        )
+        db.add(new_thesis)
+        db.flush()
+        target_id = str(new_thesis.id)
+        is_new_version = True
+    elif active:
+        # Update draft/needs_review in place
+        active.stock_type = body.stock_type
+        active.seed_memo = body.seed_memo
+        if body.exploration_note:
+            active.exploration_note = body.exploration_note
+        db.flush()
+        target_id = str(active.id)
+    else:
+        target_id = None
+    db.commit()
+
+    ticker_symbol = ticker.symbol
+    ticker_name = ticker.name
+    ticker_market = ticker.market.value
+    ticker_id_str = str(ticker.id)
+
     def event_stream():
         sections = {}
         try:
             for sse_str in generate_thesis_stream(
-                symbol=ticker.symbol,
-                name=ticker.name,
-                market=ticker.market.value,
-                ticker_id=str(ticker.id),
+                symbol=ticker_symbol,
+                name=ticker_name,
+                market=ticker_market,
+                ticker_id=ticker_id_str,
                 financial_context=financial_context,
                 stock_type=body.stock_type,
                 seed_memo=body.seed_memo,
             ):
-                # Extract sections from complete event
                 if sse_str.startswith("data:"):
                     try:
                         payload = json.loads(sse_str[5:].strip())
@@ -312,30 +363,30 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
                         pass
                 yield sse_str
         except Exception as e:
-            logger.exception("Thesis generation failed for %s", ticker.symbol)
+            logger.exception("Thesis generation failed for %s", ticker_symbol)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
             return
 
-        # Save sections to DB after stream completes
-        if sections:
-            fresh_db = db
-            thesis = fresh_db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
-            if thesis:
-                thesis.thesis = sections.get("thesis")
-                thesis.risk = sections.get("risk")
-                thesis.key_assumptions = sections.get("key_assumptions")
-                thesis.valuation = sections.get("valuation")
-                thesis.stock_type = body.stock_type
-                thesis.seed_memo = body.seed_memo
-                was_confirmed = thesis.confirmed == ThesisStatusEnum.CONFIRMED
-                thesis.confirmed = (
-                    ThesisStatusEnum.NEEDS_REVIEW if was_confirmed else ThesisStatusEnum.DRAFT
-                )
-                thesis.last_analyzed_at = datetime.utcnow()
-                fresh_db.commit()
-                logger.info("Thesis saved for %s", ticker.symbol)
-                if was_confirmed:
-                    notify_thesis_needs_review(ticker.symbol, ticker.name, ticker.market.value, ticker_id=str(ticker.id))
+        if sections and target_id:
+            from models.db import SessionLocal as _SessionLocal
+            local_db = _SessionLocal()
+            try:
+                t = local_db.query(Thesis).filter(Thesis.id == target_id).first()
+                if t:
+                    t.thesis = sections.get("thesis")
+                    t.risk = sections.get("risk")
+                    t.key_assumptions = sections.get("key_assumptions")
+                    t.valuation = sections.get("valuation")
+                    t.key_logic = sections.get("key_logic")
+                    t.last_analyzed_at = datetime.utcnow()
+                    local_db.commit()
+                    logger.info("Thesis saved for %s (v%s)", ticker_symbol, t.version_number)
+                if is_new_version:
+                    notify_thesis_needs_review(ticker_symbol, ticker_name, ticker_market, ticker_id=ticker_id_str)
+            except Exception:
+                logger.exception("Thesis DB save failed for %s", ticker_symbol)
+            finally:
+                local_db.close()
 
     return StreamingResponse(
         event_stream(),
@@ -353,9 +404,21 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
     ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    thesis = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
+    # 최신 비-retired thesis에서 refine
+    try:
+        thesis = (
+            db.query(Thesis)
+            .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed != ThesisStatusEnum.RETIRED)
+            .order_by(Thesis.version_number.desc())
+            .first()
+        )
+    except Exception:
+        db.rollback()
+        thesis = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
     if not thesis or not thesis.thesis:
         raise HTTPException(status_code=400, detail="먼저 AI 분석을 실행하세요.")
+    if thesis.confirmed == ThesisStatusEnum.CONFIRMED:
+        raise HTTPException(status_code=400, detail="Confirmed thesis는 직접 수정할 수 없습니다. 'AI 분석'으로 새 버전을 생성하세요.")
     if not body.feedback.strip():
         raise HTTPException(status_code=400, detail="피드백 내용을 입력하세요.")
 
@@ -365,15 +428,20 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
         "key_assumptions": thesis.key_assumptions or "",
         "valuation": thesis.valuation or "",
     }
+    target_id = str(thesis.id)
+    ticker_symbol = ticker.symbol
+    ticker_name = ticker.name
+    ticker_market = ticker.market.value
+    ticker_id_str = str(ticker.id)
 
     def event_stream():
         sections = {}
         try:
             for sse_str in refine_thesis_stream(
-                symbol=ticker.symbol,
-                name=ticker.name,
-                market=ticker.market.value,
-                ticker_id=str(ticker.id),
+                symbol=ticker_symbol,
+                name=ticker_name,
+                market=ticker_market,
+                ticker_id=ticker_id_str,
                 current_sections=current_sections,
                 feedback=body.feedback,
             ):
@@ -386,32 +454,196 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
                         pass
                 yield sse_str
         except Exception as e:
-            logger.exception("Thesis refine failed for %s", ticker.symbol)
+            logger.exception("Thesis refine failed for %s", ticker_symbol)
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
             return
 
         if sections:
-            t = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
-            if t:
-                t.thesis = sections.get("thesis")
-                t.risk = sections.get("risk")
-                t.key_assumptions = sections.get("key_assumptions")
-                t.valuation = sections.get("valuation")
-                was_confirmed = t.confirmed == ThesisStatusEnum.CONFIRMED
-                t.confirmed = (
-                    ThesisStatusEnum.NEEDS_REVIEW if was_confirmed else ThesisStatusEnum.DRAFT
-                )
-                t.last_analyzed_at = datetime.utcnow()
-                db.commit()
-                logger.info("Thesis refined for %s", ticker.symbol)
-                if was_confirmed:
-                    notify_thesis_needs_review(ticker.symbol, ticker.name, ticker.market.value, ticker_id=str(ticker.id))
+            from models.db import SessionLocal as _SessionLocal
+            local_db = _SessionLocal()
+            try:
+                t = local_db.query(Thesis).filter(Thesis.id == target_id).first()
+                if t:
+                    t.thesis = sections.get("thesis")
+                    t.risk = sections.get("risk")
+                    t.key_assumptions = sections.get("key_assumptions")
+                    t.valuation = sections.get("valuation")
+                    t.key_logic = sections.get("key_logic")
+                    t.last_analyzed_at = datetime.utcnow()
+                    local_db.commit()
+                    logger.info("Thesis refined for %s", ticker_symbol)
+            except Exception:
+                logger.exception("Thesis refine DB save failed")
+            finally:
+                local_db.close()
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/{ticker_id}/explore-prompt")
+def get_ticker_explore_prompt(ticker_id: str, type: str = "deep_analysis", db: Session = Depends(get_db)):
+    """Step 3 (종목 집중 분석) / Step 4 (반대 논거 탐색) 외부 Claude 프롬프트 생성."""
+    ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
+    if not ticker:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    try:
+        # thesis는 버전 필터 없이 간단하게 조회 (Phase 2 컬럼 없는 환경도 호환)
+        thesis = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
+
+        if type == "deep_analysis":
+            prompt = _build_deep_analysis_prompt(db, ticker, thesis)
+        elif type == "thesis_challenge":
+            prompt = _build_thesis_challenge_prompt(db, ticker, thesis)
+        else:
+            raise HTTPException(status_code=400, detail=f"알 수 없는 type: {type}")
+        return {"prompt": prompt}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("ticker explore-prompt 생성 실패: %s/%s", ticker_id, type)
+        raise HTTPException(status_code=500, detail=f"프롬프트 생성 오류: {str(e)}")
+
+
+def _build_deep_analysis_prompt(db, ticker, thesis) -> str:
+    """Step 3: 보고서를 읽은 후 외부 Claude와 종목을 집중 분석하는 프롬프트."""
+    from models.db import Report, ReportTypeEnum
+
+    lines = [
+        f"# {ticker.name} ({ticker.symbol}) 종목 집중 분석",
+        "",
+        "당신은 가치투자 전문가입니다. 아래 종목에 대해 집중적으로 분석해주세요.",
+        "",
+        f"## 종목 기본 정보",
+        f"- 이름: {ticker.name}",
+        f"- 심볼: {ticker.symbol}",
+        f"- 시장: {ticker.market.value}",
+        "",
+    ]
+
+    # 최신 심층 보고서 (분석 보고서)
+    latest_report = (
+        db.query(Report)
+        .filter(Report.ticker_id == ticker.id, Report.type == ReportTypeEnum.ANALYSIS)
+        .order_by(Report.created_at.desc())
+        .first()
+    )
+
+    if latest_report:
+        # XML 섹션에서 핵심 내용 추출
+        import re
+        def extract(content, name):
+            m = re.search(rf'<section name="{name}">(.*?)</section>', content, re.DOTALL)
+            return m.group(1).strip()[:600] if m else ""
+
+        biz = extract(latest_report.content, "business_overview")
+        competitive = extract(latest_report.content, "competitive_position")
+        bull_bear = extract(latest_report.content, "bull_bear_synthesis")
+
+        lines.extend([
+            "## 내부 보고서 요약 (참고용)",
+            "",
+        ])
+        if biz:
+            lines.extend([f"### 기업 개요\n{biz}", ""])
+        if competitive:
+            lines.extend([f"### 경쟁 구도\n{competitive}", ""])
+        if bull_bear:
+            lines.extend([f"### Bull/Bear 종합\n{bull_bear}", ""])
+    else:
+        lines.extend(["(심층 보고서 없음 — 공개 정보 기반으로 분석해주세요)", ""])
+
+    lines.extend([
+        "## 분석 요청",
+        "",
+        "아래 항목을 중심으로 깊이 있는 분석을 해주세요:",
+        "",
+        "1. **이 비즈니스의 진짜 경쟁 우위는 무엇인가?**",
+        "   - 일시적인 우위와 구조적 우위를 구분해서",
+        "",
+        "2. **향후 3~5년 시나리오: 낙관/기본/비관**",
+        "   - 각 시나리오의 핵심 전제와 트리거는?",
+        "",
+        "3. **지금 이 주가에 내포된 기대치는 무엇인가?**",
+        "   - 시장이 무엇을 pricing 하고 있는가?",
+        "",
+        "4. **내가 이 종목을 매수한다면, 핵심 thesis 한 단락을 작성한다면?**",
+        "   - seed_memo 초안을 써줘 (compounding/growth/asset_play/turnaround/cyclical/special_situation 중 하나로)",
+        "",
+        "분석 후 내가 직접 투자 thesis를 작성할 수 있도록 방향을 제시해주세요. 매수/매도 추천은 하지 마세요.",
+    ])
+
+    return "\n".join(lines)
+
+
+def _build_thesis_challenge_prompt(db, ticker, thesis) -> str:
+    """Step 4: 현재 논리의 반대 논거를 집중 탐색하는 프롬프트."""
+
+    lines = [
+        f"# {ticker.name} ({ticker.symbol}) 반대 논거 탐색",
+        "",
+        "당신은 악마의 대변인(devil's advocate) 역할을 해주세요.",
+        "아래 나의 투자 논리에서 약점과 반대 논거를 철저히 찾아주세요.",
+        "",
+        f"## 종목 정보",
+        f"- 이름: {ticker.name} ({ticker.symbol}, {ticker.market.value})",
+        "",
+    ]
+
+    if thesis:
+        if thesis.seed_memo:
+            lines.extend([
+                "## 나의 초기 관점 (seed_memo)",
+                thesis.seed_memo,
+                "",
+            ])
+        if thesis.thesis:
+            lines.extend([
+                "## 현재 thesis 초안",
+                thesis.thesis[:600] + ("..." if len(thesis.thesis) > 600 else ""),
+                "",
+            ])
+        key_logic = getattr(thesis, 'key_logic', None)
+        if key_logic:
+            lines.extend([
+                "## 내가 생각하는 핵심 논리 (key_logic)",
+                key_logic,
+                "",
+            ])
+        if thesis.risk:
+            lines.extend([
+                "## 이미 인식하고 있는 리스크",
+                thesis.risk[:400],
+                "",
+            ])
+    else:
+        lines.extend([
+            "*(thesis 미작성 — 아래 종목에 대한 일반적 투자 논리의 약점을 찾아주세요)*",
+            "",
+        ])
+
+    lines.extend([
+        "## 반대 논거 탐색 요청",
+        "",
+        "1. **내 논리의 핵심 가정 중 틀릴 수 있는 것 3가지**",
+        "   - 각각의 확률과 임팩트를 평가해줘",
+        "",
+        "2. **이 투자 thesis를 무너뜨릴 수 있는 시나리오**",
+        "   - 산업 구조 변화? 경쟁사? 거시 환경?",
+        "",
+        "3. **내가 놓치고 있을 수 있는 리스크**",
+        "   - 회계/거버넌스 이슈, 기술 대체, 규제 리스크 등",
+        "",
+        "4. **thesis를 강화하려면 무엇을 더 확인해야 하는가?**",
+        "",
+        "반박을 통해 논리를 강화하는 것이 목적입니다. 투자 추천은 하지 마세요.",
+    ])
+
+    return "\n".join(lines)
 
 
 @router.get("/{ticker_id}/financial-data")

@@ -88,12 +88,6 @@ def notify_macro_saved(report_id: str) -> None:
     send_message(f"📊 <b>매크로 보고서 생성 완료</b> — {now_kst}{link}")
 
 
-def notify_discovery_saved(report_id: str, idea_snippet: str = "") -> None:
-    idea_part = f"\n💡 아이디어: {idea_snippet[:80]}" if idea_snippet else ""
-    link = f'\n🔗 <a href="{_report_link(report_id)}">탐색 보고서 보기</a>'
-    send_message(f"🔍 <b>종목 탐색 완료</b>{idea_part}{link}")
-
-
 def notify_trades_detected(trades: list[dict]) -> None:
     ACTION_LABEL = {"buy": "신규매수", "sell": "전량매도", "add": "추가매수", "reduce": "일부매도"}
     ACTION_ICON = {"buy": "🟢", "sell": "🔴", "add": "📈", "reduce": "📉"}
@@ -123,8 +117,3 @@ def notify_trades_detected(trades: list[dict]) -> None:
     )
 
 
-def notify_portfolio_review_saved(report_id: str) -> None:
-    from datetime import datetime, timezone, timedelta
-    now_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M KST")
-    link = f'\n🔗 <a href="{_report_link(report_id)}">포트폴리오 점검 보기</a>'
-    send_message(f"📦 <b>포트폴리오 점검 완료</b> — {now_kst}{link}")

@@ -2,24 +2,17 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models.db import get_db, Report, ReportComment, Ticker, Portfolio, Thesis, FinancialCache, ReportTypeEnum, SessionLocal, TickerStatusEnum, ThesisStatusEnum
-from services.scheduler import run_daily_briefing
-from services.agent import generate_macro_report, generate_discovery_stream, generate_portfolio_review_stream
+from models.db import get_db, Report, ReportComment, Ticker, ReportTypeEnum, SessionLocal, TickerStatusEnum
+from services.agent import generate_macro_report
 from services.market_data import get_market_indicators
-from services.telegram import notify_discovery_saved, notify_portfolio_review_saved, notify_macro_saved
+from services.telegram import notify_macro_saved
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-class DiscoveryRequest(BaseModel):
-    idea: str
-    lens: str = "다양하게"
 
 
 class MarkReadBody(BaseModel):
@@ -157,220 +150,145 @@ def delete_comment(report_id: str, comment_id: str, db: Session = Depends(get_db
     db.commit()
 
 
-@router.post("/daily-briefing/trigger", status_code=202)
-def trigger_daily_briefing(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_daily_briefing)
-    return {"message": "데일리 브리핑 생성 시작됨"}
+@router.get("/explore-prompt")
+def get_explore_prompt(type: str = "discovery", db: Session = Depends(get_db)):
+    """외부 Claude 탐색에 붙여넣을 프롬프트 텍스트 반환."""
+    try:
+        if type == "discovery":
+            return {"prompt": _build_discovery_prompt(db)}
+        elif type == "portfolio_review":
+            return {"prompt": _build_portfolio_prompt(db)}
+        else:
+            raise HTTPException(status_code=400, detail=f"알 수 없는 type: {type}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("explore-prompt 생성 실패: type=%s", type)
+        raise HTTPException(status_code=500, detail=f"프롬프트 생성 오류: {str(e)}")
+
+
+def _build_discovery_prompt(db) -> str:
+    """현재 포트폴리오/관심 종목을 컨텍스트로 포함한 종목 탐색 프롬프트."""
+    from datetime import datetime
+
+    from sqlalchemy.orm import selectinload
+    tickers = db.query(Ticker).options(selectinload(Ticker.theses)).all()
+    portfolio = [t for t in tickers if t.status == TickerStatusEnum.PORTFOLIO]
+    watchlist = [t for t in tickers if t.status == TickerStatusEnum.WATCHLIST]
+
+    lines = [
+        "당신은 가치투자 전문가입니다. 아래 현재 포트폴리오와 관심 종목을 참고하여 새로운 투자 아이디어를 탐색해주세요.",
+        "",
+        "## 현재 포트폴리오",
+    ]
+    if portfolio:
+        for t in portfolio:
+            thesis_line = ""
+            if t.thesis:
+                st = t.thesis.stock_type or "미분류"
+                thesis_line = f" | {st}"
+                if t.thesis.key_assumptions:
+                    thesis_line += f" | 핵심가정: {t.thesis.key_assumptions[:80].strip()}"
+            lines.append(f"- {t.name} ({t.symbol}, {t.market.value}){thesis_line}")
+    else:
+        lines.append("- (없음)")
+
+    lines.extend(["", "## 현재 관심 목록"])
+    if watchlist:
+        for t in watchlist:
+            st = (t.thesis.stock_type or "") if t.thesis else ""
+            lines.append(f"- {t.name} ({t.symbol}, {t.market.value}){' | ' + st if st else ''}")
+    else:
+        lines.append("- (없음)")
+
+    lines.extend([
+        "",
+        "## 탐색 요청",
+        "위 포트폴리오와 겹치지 않으면서, 가치투자 관점에서 매력적인 새 종목을 탐색해주세요.",
+        "",
+        "다음 중 하나 이상의 렌즈로 접근해주세요:",
+        "- Compounding: ROIC 15%+ 지속, 재투자 기회 존재",
+        "- Growth: 매출 CAGR 20%+, TAM 초기 침투",
+        "- Asset Play: P/B 할인, 명확한 촉매 이벤트",
+        "- Turnaround: 구조조정 진행 중, Cash runway 충분",
+        "- Cyclical: 사이클 저점 근처, 부채 낮음",
+        "- Special Situation: M&A, 스핀오프, 규제 변화",
+        "",
+        "각 추천 종목에 대해:",
+        "1. 왜 지금 매력적인가 (핵심 논리 2~3문장)",
+        "2. 핵심 리스크",
+        "3. 무엇이 바뀌면 thesis가 깨지는가",
+        "",
+        "미국 종목 3~5개, 한국 종목 2~3개를 추천해주세요.",
+    ])
+
+    return "\n".join(lines)
+
+
+def _build_portfolio_prompt(db) -> str:
+    """현재 포트폴리오를 컨텍스트로 포함한 포트폴리오 점검 프롬프트."""
+    from datetime import datetime
+
+    from sqlalchemy.orm import selectinload
+    tickers = (
+        db.query(Ticker)
+        .options(selectinload(Ticker.theses))
+        .filter(Ticker.status == TickerStatusEnum.PORTFOLIO)
+        .all()
+    )
+
+    lines = [
+        "당신은 가치투자 전문가입니다. 아래 포트폴리오를 점검해주세요.",
+        "",
+        "## 포트폴리오 현황",
+    ]
+
+    if not tickers:
+        lines.append("- (포트폴리오 없음)")
+    else:
+        for t in tickers:
+            p = t.portfolio
+            price_line = ""
+            if p:
+                if p.current_price and p.avg_price:
+                    pnl = (p.current_price - p.avg_price) / p.avg_price * 100 if p.avg_price else 0
+                    price_line = f" | 평균단가 {p.avg_price:.2f} / 현재가 {p.current_price:.2f} ({pnl:+.1f}%)"
+                if p.daily_pct:
+                    price_line += f" | 당일 {p.daily_pct:+.1f}%"
+
+            thesis_section = ""
+            if t.thesis:
+                st = t.thesis.stock_type or "미분류"
+                status = t.thesis.confirmed.value
+                thesis_section = f"\n  - 유형: {st} | 상태: {status}"
+                if t.thesis.key_logic:
+                    thesis_section += f"\n  - 핵심 논리: {t.thesis.key_logic[:200].strip()}"
+                elif t.thesis.key_assumptions:
+                    thesis_section += f"\n  - 핵심가정: {t.thesis.key_assumptions[:150].strip()}"
+                if t.thesis.risk:
+                    thesis_section += f"\n  - 리스크: {t.thesis.risk[:100].strip()}"
+
+            lines.append(f"- **{t.name}** ({t.symbol}, {t.market.value}){price_line}{thesis_section}")
+            lines.append("")
+
+    lines.extend([
+        "## 점검 요청",
+        "",
+        "1. **포트폴리오 전체 관점**: 집중도, 상관관계, 시장 환경 적합성",
+        "2. **종목별 thesis 건전성**: 각 종목의 핵심가정이 여전히 유효한가",
+        "3. **행동 필요 항목**: 추가 조사가 필요하거나 비중 재검토가 필요한 종목",
+        "4. **전략적 관점**: 현재 시장 환경에서 포트폴리오의 취약점과 기회",
+        "",
+        "특정 투자 결정을 내리지 말고, 사고의 방향을 제시해주세요.",
+    ])
+
+    return "\n".join(lines)
 
 
 @router.post("/macro/trigger", status_code=202)
 def trigger_macro_report(background_tasks: BackgroundTasks):
     background_tasks.add_task(_run_macro_report)
     return {"message": "매크로 보고서 생성 시작됨"}
-
-
-@router.post("/discovery")
-def run_discovery(body: DiscoveryRequest):
-    """투자 아이디어 → 유망 종목 탐색 보고서 (SSE 스트리밍)."""
-    idea = body.idea.strip()
-    if not idea:
-        raise HTTPException(status_code=400, detail="idea는 필수입니다")
-
-    def event_stream():
-        import json as _json
-        captured = {"full_text": ""}
-        had_error = False
-        for event in generate_discovery_stream(idea, lens=body.lens):
-            yield event
-            if event.startswith("data: "):
-                try:
-                    data = _json.loads(event[6:])
-                    if data.get("type") == "complete":
-                        captured["full_text"] = data.get("full_text", "")
-                    elif data.get("type") == "error":
-                        had_error = True
-                except Exception:
-                    pass
-        full_text = captured["full_text"]
-        if full_text:
-            db = None
-            try:
-                db = SessionLocal()
-                report = Report(ticker_id=None, type=ReportTypeEnum.DISCOVERY, content=full_text)
-                db.add(report)
-                db.commit()
-                db.refresh(report)
-                report_id = str(report.id)
-                yield f"data: {_json.dumps({'type': 'saved', 'report_id': report_id})}\n\n"
-                yield f"data: {_json.dumps({'type': 'done', 'report_id': report_id})}\n\n"
-                try:
-                    notify_discovery_saved(report_id, idea[:80])
-                except Exception:
-                    pass
-            except Exception:
-                logger.exception("Discovery report DB 저장 실패")
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'DB 저장 실패'})}\n\n"
-            finally:
-                if db:
-                    db.close()
-        elif not had_error:
-            yield f"data: {_json.dumps({'type': 'error', 'message': '보고서 생성은 끝났지만 저장할 본문을 받지 못했습니다.'})}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/portfolio-review")
-def run_portfolio_review():
-    """포트폴리오 전체 점검 보고서 (SSE 스트리밍)."""
-    db = SessionLocal()
-    try:
-        portfolio_context = _build_portfolio_context(db)
-    finally:
-        db.close()
-
-    if not portfolio_context:
-        raise HTTPException(status_code=400, detail="포트폴리오 종목이 없습니다. KIS 동기화를 먼저 실행하세요.")
-
-    def event_stream():
-        import json as _json
-        captured = {"full_text": ""}
-        for event in generate_portfolio_review_stream(portfolio_context):
-            yield event
-            if event.startswith("data: "):
-                try:
-                    data = _json.loads(event[6:])
-                    if data.get("type") == "complete":
-                        captured["full_text"] = data.get("full_text", "")
-                except Exception:
-                    pass
-        full_text = captured["full_text"]
-        if full_text:
-            try:
-                _db = SessionLocal()
-                report = Report(ticker_id=None, type=ReportTypeEnum.PORTFOLIO_REVIEW, content=full_text)
-                _db.add(report)
-                _db.commit()
-                report_id = str(report.id)
-                _db.close()
-                yield f"data: {_json.dumps({'type': 'saved', 'report_id': report_id})}\n\n"
-                try:
-                    notify_portfolio_review_saved(report_id)
-                except Exception:
-                    pass
-            except Exception:
-                logger.exception("Portfolio review DB 저장 실패")
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'DB 저장 실패'})}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-def _build_portfolio_context(db) -> str:
-    """DB에서 포트폴리오 데이터를 조립해 프롬프트용 문자열로 반환."""
-    from datetime import datetime
-
-    tickers = (
-        db.query(Ticker)
-        .filter(Ticker.status == TickerStatusEnum.PORTFOLIO)
-        .all()
-    )
-    if not tickers:
-        return ""
-
-    # 전체 포트폴리오 가치 계산 (USD 기준)
-    total_value = 0.0
-    holdings = []
-
-    for t in tickers:
-        p = t.portfolio
-        if not p:
-            continue
-        market_value = (p.quantity or 0) * (p.current_price or 0)
-        total_value += market_value
-
-        # metrics 캐시
-        metrics_row = (
-            db.query(FinancialCache)
-            .filter(FinancialCache.ticker_id == t.id, FinancialCache.data_type == "metrics")
-            .first()
-        )
-        metrics = {}
-        if metrics_row and metrics_row.expires_at > datetime.utcnow():
-            raw = metrics_row.data
-            metrics = raw[0] if isinstance(raw, list) and raw else (raw if isinstance(raw, dict) else {})
-
-        holdings.append({
-            "symbol": t.symbol,
-            "name": t.name,
-            "market": t.market.value,
-            "quantity": p.quantity or 0,
-            "avg_price": p.avg_price or 0,
-            "current_price": p.current_price or 0,
-            "daily_pct": p.daily_pct or 0,
-            "market_value": market_value,
-            "thesis": t.thesis,
-            "metrics": metrics,
-        })
-
-    if not holdings:
-        return ""
-
-    # 비중 계산
-    for h in holdings:
-        h["weight"] = (h["market_value"] / total_value * 100) if total_value else 0
-        avg = h["avg_price"]
-        cur = h["current_price"]
-        h["pnl_pct"] = ((cur - avg) / avg * 100) if avg else 0
-        h["unrealized_pnl"] = (cur - avg) * h["quantity"]
-
-    # 정렬: 비중 내림차순
-    holdings.sort(key=lambda x: x["market_value"], reverse=True)
-
-    def pct(v): return f"{v*100:.1f}%" if v is not None else "N/A"
-    def x(v): return f"{v:.1f}x" if v is not None else "N/A"
-    def sign(v): return f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%"
-
-    lines = [
-        f"## 포트폴리오 현황 (총 {total_value:,.0f} USD 상당, {len(holdings)}종목)\n",
-    ]
-
-    for h in holdings:
-        th = h["thesis"]
-        thesis_status = th.confirmed.value if th else "없음"
-        m = h["metrics"]
-
-        lines.append(
-            f"### {h['symbol']} — {h['name']} ({h['market']})\n"
-            f"- 보유: {h['quantity']:.2f}주 | 평균단가: {h['avg_price']:.2f} | 현재가: {h['current_price']:.2f}\n"
-            f"- 평가금액: {h['market_value']:,.0f} | 비중: {h['weight']:.1f}% | 평가손익: {sign(h['pnl_pct'])} ({h['unrealized_pnl']:+,.0f})\n"
-            f"- 당일등락: {sign(h['daily_pct'])}\n"
-            f"- Thesis 상태: {thesis_status}\n"
-        )
-
-        if th and th.thesis:
-            lines.append(f"- Thesis 요약: {th.thesis[:300].strip()}{'...' if len(th.thesis) > 300 else ''}\n")
-        if th and th.key_assumptions:
-            lines.append(f"- Key Assumptions: {th.key_assumptions[:300].strip()}{'...' if len(th.key_assumptions) > 300 else ''}\n")
-
-        if m:
-            lines.append(
-                f"- Key Metrics (TTM): P/E {x(m.get('price_to_earnings_ratio'))} | "
-                f"EV/EBITDA {x(m.get('enterprise_value_to_ebitda_ratio'))} | "
-                f"FCF Yield {pct(m.get('free_cash_flow_yield'))} | "
-                f"ROE {pct(m.get('return_on_equity'))} | "
-                f"ROIC {pct(m.get('return_on_invested_capital'))} | "
-                f"Revenue Growth {pct(m.get('revenue_growth'))}\n"
-            )
-        lines.append("")
-
-    return "\n".join(lines)
 
 
 def _run_macro_report():

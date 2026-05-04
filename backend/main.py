@@ -11,6 +11,8 @@ from routes.market import router as market_router
 from routes.settings import router as settings_router
 from routes.tradelog import router as tradelog_router
 from routes.ideas import router as ideas_router
+from routes.conversations import router as conversations_router
+from routes.human_responses import router as human_responses_router
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -45,6 +47,8 @@ app.include_router(market_router, prefix="/api/market", tags=["market"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(tradelog_router, prefix="/api/tradelog", tags=["tradelog"])
 app.include_router(ideas_router, prefix="/api/ideas", tags=["ideas"])
+app.include_router(conversations_router, prefix="/api/conversations", tags=["conversations"])
+app.include_router(human_responses_router, prefix="/api/human-responses", tags=["human_responses"])
 
 
 @app.on_event("startup")
@@ -52,26 +56,42 @@ async def startup():
     from sqlalchemy import text as _text
     # create_all 먼저 실행 → enum 타입 생성
     Base.metadata.create_all(bind=engine)
-    # 이후 신규 enum 값 추가 (기존 DB 마이그레이션용, 신규 DB는 no-op)
-    with engine.connect() as conn:
+
+    # ALTER TYPE ... ADD VALUE 는 트랜잭션 블록 안에서 실행 불가 → AUTOCOMMIT 연결로 분리
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as _ac:
+        # reporttypeenum 값 이름 변경 (ANALYSIS→analysis 등)
         for _old, _new in (
             ("ANALYSIS", "analysis"),
             ("DAILY_BRIEF", "daily_brief"),
             ("MACRO", "macro"),
         ):
-            conn.execute(_text(
-                f"DO $$ BEGIN "
-                f"IF EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel='{_old}' "
-                f"AND enumtypid=(SELECT oid FROM pg_type WHERE typname='reporttypeenum')) "
-                f"THEN ALTER TYPE reporttypeenum RENAME VALUE '{_old}' TO '{_new}'; END IF; END $$;"
-            ))
+            try:
+                _ac.execute(_text(
+                    f"DO $$ BEGIN "
+                    f"IF EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel='{_old}' "
+                    f"AND enumtypid=(SELECT oid FROM pg_type WHERE typname='reporttypeenum')) "
+                    f"THEN ALTER TYPE reporttypeenum RENAME VALUE '{_old}' TO '{_new}'; END IF; END $$;"
+                ))
+            except Exception:
+                pass
+        # reporttypeenum 신규 값 추가
         for _val in ("discovery", "portfolio_review"):
-            conn.execute(_text(
-                f"DO $$ BEGIN "
-                f"IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel='{_val}' "
-                f"AND enumtypid=(SELECT oid FROM pg_type WHERE typname='reporttypeenum')) "
-                f"THEN ALTER TYPE reporttypeenum ADD VALUE '{_val}'; END IF; END $$;"
+            try:
+                _ac.execute(_text(
+                    f"ALTER TYPE reporttypeenum ADD VALUE IF NOT EXISTS '{_val}';"
+                ))
+            except Exception:
+                pass
+        # Phase 2: thesisstatusenum 에 retired 추가
+        try:
+            _ac.execute(_text(
+                "ALTER TYPE thesisstatusenum ADD VALUE IF NOT EXISTS 'retired';"
             ))
+        except Exception:
+            pass
+
+    # 나머지 DDL (컬럼 추가 등) — 일반 트랜잭션으로
+    with engine.connect() as conn:
         # is_read 컬럼 (Report 테이블)
         conn.execute(_text(
             "ALTER TABLE reports ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;"
@@ -126,6 +146,44 @@ async def startup():
         conn.execute(_text(
             "ALTER TABLE theses ADD COLUMN IF NOT EXISTS seed_memo TEXT;"
         ))
+        # Phase 2: theses.ticker_id unique 제약 제거 (다중 버전 허용)
+        conn.execute(_text(
+            "DO $$ BEGIN "
+            "IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='theses_ticker_id_key') "
+            "THEN ALTER TABLE theses DROP CONSTRAINT theses_ticker_id_key; END IF; END $$;"
+        ))
+        # Phase 2: theses 신규 컬럼
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS version_number INTEGER NOT NULL DEFAULT 1;"))
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS parent_version_id UUID;"))
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS exploration_note TEXT;"))
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS key_logic TEXT;"))
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP;"))
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS retirement_reason VARCHAR(50);"))
+        # Phase 2: 기존 thesis에 version_number=1 백필
+        conn.execute(_text("UPDATE theses SET version_number = 1 WHERE version_number IS NULL OR version_number = 0;"))
+        # conversation_imports 테이블
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS conversation_imports (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                ticker_id UUID REFERENCES tickers(id) ON DELETE SET NULL,
+                import_type VARCHAR(50) NOT NULL,
+                summary TEXT NOT NULL,
+                raw_excerpt TEXT,
+                created_at TIMESTAMP DEFAULT now()
+            );
+        """))
+        # human_responses 테이블
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS human_responses (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                target_type VARCHAR(50) NOT NULL,
+                target_id UUID NOT NULL,
+                section_key VARCHAR(50),
+                response_type VARCHAR(50) NOT NULL,
+                content TEXT NOT NULL,
+                recorded_at TIMESTAMP DEFAULT now()
+            );
+        """))
         conn.commit()
     logger.info("DB tables ready")
     from services.telegram_bot import start_bot

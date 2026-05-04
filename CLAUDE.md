@@ -8,14 +8,17 @@
 ## 핵심 철학 (절대 어기지 말 것)
 
 1. AI는 초안만 생성 → **사람이 confirmed 눌러야** Break Monitor 등 모든 감시 활성화
-2. `draft → confirmed → needs_review` 상태 머신이 모든 것의 중심
+2. `draft → confirmed → retired` 상태 머신 + **버전 관리** — 수정 = 새 버전 생성, 기존 버전 보존
 3. Macro는 보고서/대시보드로만 — 개별 thesis DB에 넣지 않음
 4. 보고서 읽기는 **웹앱**, 명령 실행·알림은 **Telegram**
 5. 자동매매 코드는 절대 작성하지 않음
 6. **데이터 수집과 분석은 분리** — 재무 데이터를 먼저 수집(refresh-data)한 뒤 AI 분석 실행
-7. **뉴스는 투자 thesis 렌즈로 필터링** — 주가/목표가/애널리스트 의견은 노이즈. thesis key_assumptions에 직접 영향을 주는 사건만 신호
-8. **Thesis는 관점 기반 생성** — "AI 분석" 클릭 시 stock_type + seed_memo 입력 필수. AI는 사람의 관점을 정리하는 역할. AI가 관점을 만들지 않음
-9. **종목 상세 보고서는 중립** — report-generator는 특정 투자 철학에 편향되지 않은 다관점 분석. 결론을 내리지 않고 사용자가 관점을 수립할 재료를 제공
+7. **뉴스는 thesis 렌즈로 필터링** — 주가/목표가/애널리스트 의견은 노이즈. key_logic에 직접 영향을 주는 사건만 신호
+8. **Thesis는 관점 기반 생성** — stock_type + seed_memo + exploration_note 입력. AI는 사람의 관점을 정리하는 역할
+9. **종목 상세 보고서는 중립** — 결론 없이 Bull/Bear 논거 병기
+10. **탐색은 밖에서, 확정은 시스템에서** — 종목 탐색·포트폴리오 점검·집중분석은 외부 Claude로, 결과를 시스템에 기록
+11. **LLM은 관찰, 사람은 판단** — Break Monitor는 "무엇이 바뀌었는가"만 출력, verdict는 사람이 결정
+12. **논리를 기록한다** — 진입 시 key_logic 명문화, 청산 시 복기 (Phase 4)
 
 ---
 
@@ -38,10 +41,12 @@ value-copilot/
 │   │   ├── tickers.py              # 종목 CRUD + analyze/refine/refresh-data/report/bulk-*
 │   │   │                           # + DELETE /{id} (cascade) + POST /{id}/resolve-valley (단건)
 │   │   ├── thesis.py               # Thesis CRUD + confirm
-│   │   ├── reports.py              # 보고서 관리 + 트리거 + discovery + portfolio-review
+│   │   ├── reports.py              # 보고서 관리 + macro 트리거 + explore-prompt 생성
 │   │   ├── portfolio.py            # KIS 동기화 트리거 + 거래 감지
 │   │   ├── tradelog.py             # 투자 일지 CRUD (POST 수동생성/GET/PATCH note/DELETE)
 │   │   ├── ideas.py                # 아이디어 메모 CRUD (GET/POST/PATCH/DELETE)
+│   │   ├── conversations.py        # ConversationImport CRUD (외부 탐색 결과 기록)
+│   │   ├── human_responses.py      # HumanResponse CRUD (보고서 섹션 메모)
 │   │   ├── market.py               # 시장 지표 API
 │   │   └── settings.py             # 설정 조회/수정 + system-info
 │   ├── services/
@@ -52,30 +57,23 @@ value-copilot/
 │   │   │                           # 8-K: 실적(2.02)/임원변경(5.02)/주요계약(1.01)/가이던스(7.01) 필터링
 │   │   │                           # CIK 캐시(_cik_cache) 프로세스 메모리 내 유지
 │   │   ├── dart_pipeline.py        # DART 정기공시 TOC → viewer.do → Claude Haiku 요약 → DB
-│   │   ├── scheduler.py            # 06:00 light_refresh / 07:00 briefing / 08:00 break_monitor
+│   │   ├── scheduler.py            # 06:00 light_refresh / 08:00 break_monitor / 월 08:00 weekly_briefing
 │   │   ├── market_data.py          # VIX / S&P500 / KOSPI / Fear&Greed
 │   │   ├── portfolio_sync.py       # KIS API 동기화 + 거래 감지 → TradeLog 저장
 │   │   │                           # current_price/daily_pct는 Yahoo Finance quote로 덮어씀
 │   │   ├── valley.py               # Valley.town AI 종목 페이지 URL 조회 + FinancialCache 캐시 (30일)
-│   │   ├── telegram.py             # notify_* 9개 함수 (APP_URL 딥링크 포함)
+│   │   ├── telegram.py             # notify_* 7개 함수 (APP_URL 딥링크 포함)
 │   │   └── telegram_bot.py         # /analyze /report /sync /macro 커맨드
 │   └── .claude/
 │       └── skills/
 │           ├── thesis-generator/
-│           │   ├── SKILL.md        # 관점 기반 초안 생성 (stock_type + seed_memo 입력)
+│           │   ├── SKILL.md        # 관점 기반 초안 생성 (stock_type + seed_memo + key_logic 추출)
 │           │   └── refs/           # stock_type별 투자 프레임워크 (동적 로드)
-│           │       ├── compounding.md
-│           │       ├── growth.md
-│           │       ├── asset_play.md
-│           │       ├── turnaround.md
-│           │       ├── cyclical.md
-│           │       └── special_situation.md
-│           ├── report-generator/SKILL.md   # 중립 8섹션 심층 보고서 (버핏 편향 제거)
-│           ├── daily-briefing/SKILL.md
-│           ├── break-monitor/SKILL.md      # stock_type별 신호 분기
+│           ├── report-generator/SKILL.md          # 중립 8섹션 심층 보고서
+│           ├── break-monitor/SKILL.md             # stock_type별 신호 분기 (현재: 레이블 출력, Phase3에서 관찰 전용으로 개선 예정)
 │           ├── macro-report/SKILL.md
-│           ├── stock-discovery/SKILL.md    # 탐색 렌즈(lens) 파라미터 지원
-│           └── portfolio-review/SKILL.md
+│           ├── weekly-briefing/SKILL.md           # 주간 브리핑 (월 08:00)
+│           └── exploration-prompt-generator/SKILL.md  # 외부 탐색용 프롬프트 생성
 │
 └── frontend/                       # React + Vite
     ├── Dockerfile.prod             # 프로덕션 빌드 (node → nginx 멀티스테이지)
@@ -96,17 +94,18 @@ value-copilot/
         │   │                       # bulk 버튼: 데이터 수집 / 리포트 생성 / Valley 링크 찾기 / 종목 삭제
         │   │                       # 종목 단건 삭제 (카드 Trash 아이콘 → 확인 모달)
         │   │                       # (bulk Thesis 생성 제거됨 — 관점 입력 필요로 개별 생성)
-        │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 + 보고서탭
-        │   │                       # AI 분석 버튼 → 모달(stock_type 선택 + seed_memo 입력)
-        │   │                       # 헤더: Valley 링크 버튼(있으면 외부링크, 없으면 단건 조회) + 종목 삭제
-        │   │                       # 종목명 헤더 크게, 심볼·시장 작게 표시
-        │   │                       # main 영역에 fs-${fontSize} 적용 (글자크기 조절 반영)
+        │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 + 보고서탭 + 버전히스토리탭
+        │   │                       # AI 분석 버튼 → 모달(stock_type + seed_memo + exploration_note)
+        │   │                       # 외부 탐색 도구: 심층분석 프롬프트 / 반대논거 탐색 프롬프트
+        │   │                       # 종목별 탐색 기록(ConversationImport) 인라인 표시
+        │   │                       # key_logic 카드 (Confirm 전 필수 입력)
+        │   │                       # 새 버전 생성 / 버전 히스토리 (v1→v2 비교)
         │   ├── Reports.tsx         # 보고서 히스토리 + 읽음관리 + 코멘트 + 종류 필터 + 복수삭제
-        │   │                       # 종목 탐색: 렌즈 선택 드롭다운 + 아이디어 입력
-        │   │                       # 보고서 목록: 종목명 크게, 심볼 회색 작게
+        │   │                       # 탐색 프롬프트 복사: 종목 탐색 / 포트폴리오 점검 (외부 Claude용)
+        │   │                       # 보고서 섹션별 HumanResponse 메모 슬롯
         │   │                       # 사이드바 접기/펼치기 (PanelLeft 토글, lg+ only)
-        │   │                       # 컨테이너 max-w-[1400px]. 보고서 본문에 fs-${fontSize} 적용
-        │   └── Journal.tsx         # 거래일지 탭 (KIS 동기화 거래 + 수동 기록 + 메모) + 아이디어 탭
+        │   └── Journal.tsx         # 거래일지 탭 + 아이디어 탭 + 탐색결과 탭
+        │                           # 탐색결과: ConversationImport 기록 (discovery/deep_analysis/thesis_challenge/portfolio_review)
         │                           # 수동 기록: "수동 기록" 버튼 → ManualTradeComposer 모달 → POST /api/tradelog
         ├── api.ts
         └── types.ts
@@ -127,19 +126,31 @@ Ticker:
   daily_alert: bool    # Break Monitor 대상 여부
   created_at, updated_at
 
-# Thesis — 투자 노트 (핵심)
+# Thesis — 투자 노트 (버전 관리)
 Thesis:
   id: uuid
-  ticker_id: uuid (FK, unique)
-  confirmed: enum      # draft | confirmed | needs_review
+  ticker_id: uuid (FK)     # unique 제약 없음 — 종목당 여러 버전 가능
+  version_number: int       # 1부터 시작
+  parent_version_id: uuid | null  # 이전 버전 추적
+  confirmed: enum      # draft | confirmed | needs_review | retired
   confirmed_at: datetime | null
   thesis: text
   risk: text
-  key_assumptions: text   # Break Monitor가 이 수치로 모니터링
+  key_assumptions: text
   valuation: text
   last_analyzed_at: datetime
   stock_type: enum | null  # compounding | growth | asset_play | turnaround | cyclical | special_situation
-  seed_memo: text | null   # 사용자의 초기 투자 관점 (AI 분석 시 입력 필수)
+  seed_memo: text | null   # 사용자의 초기 투자 관점
+  exploration_note: text | null  # 외부 탐색에서 건진 핵심 인사이트
+  key_logic: text | null   # "이 논리가 깨지면 thesis가 무너진다" — Confirm 전 필수
+  retired_at: datetime | null
+  retirement_reason: str | null  # superseded | broken | sold | manual
+
+  # 비즈니스 규칙
+  # - Ticker.thesis @property: confirmed > needs_review > draft (version_number 내림차순)
+  # - AI 분석 시 confirmed 버전 있으면 새 draft 버전 생성 (기존 유지)
+  # - Confirm 시 이전 non-retired 버전들 → retired (retirement_reason='superseded')
+  # - key_logic 없으면 Confirm 불가
 
 # Report — 생성된 보고서
 Report:
@@ -215,10 +226,29 @@ Settings:
 # IdeaMemo — 자유 형식 투자 아이디어 메모
 IdeaMemo:
   id: uuid
-  content: text                  # 메모 본문
+  content: text
   ticker_symbol: str | null      # 선택적 종목 태그 (DB 종목과 무관한 자유 입력, 대문자 저장)
   created_at: datetime
   updated_at: datetime
+
+# ConversationImport — 외부 탐색 결과 기록 (Phase 2)
+ConversationImport:
+  id: uuid
+  ticker_id: uuid | null (FK → tickers, SET NULL)
+  import_type: str   # discovery | deep_analysis | thesis_challenge | portfolio_review
+  summary: text      # 핵심 요약 (사람이 직접)
+  raw_excerpt: text | null  # 중요 발췌 (선택)
+  created_at: datetime
+
+# HumanResponse — LLM 출력에 대한 사람 메모 (Phase 2)
+HumanResponse:
+  id: uuid
+  target_type: str   # report | thesis | break_signal | retrospective
+  target_id: uuid
+  section_key: str | null  # 보고서 섹션 구분
+  response_type: str  # agree | disagree | partial | override | note
+  content: text
+  recorded_at: datetime
 ```
 
 ---
@@ -324,58 +354,56 @@ Rate limit 보호:
     → "수동 기록" 버튼 → ManualTradeComposer 모달 → POST /api/tradelog
       포트폴리오 종목 선택 시 현재 수량/단가 자동 입력. 거래유형(buy/add/reduce/sell) 선택
   아이디어 탭: IdeaMemo 자유 메모 (상단 작성 폼 + 날짜별 그룹)
-    → 종목 태그 선택 가능 (DB 미등록 종목도 허용)
-    → 카드 호버 시 수정/삭제 버튼 노출
+  탐색결과 탭: ConversationImport 기록 (외부 Claude 탐색 결과, 종목 연결 가능)
 
 [매일 자동]
   06:00  light_refresh  : news/metrics/insider_trades 갱신
                           + US_Stock 종목별 8-K 신규 공시 체크 (이미 요약된 건 즉시 스킵)
-  07:00  daily_briefing : 뉴스 + 포트폴리오 + 매크로 → 3섹션 브리핑 (max_tokens=8192)
-                        → Telegram + /reports 딥링크
-  08:00  break_monitor  : confirmed 종목 → stock_type별 신호 기준으로 intact/weakening/broken 판정
+  08:00  break_monitor  : confirmed 종목 → stock_type별 신호 기준으로 관찰 출력
                         → Telegram + /tickers/{id}/thesis 딥링크
+  월 08:00 weekly_briefing : 주간 모니터링 브리핑 (3섹션)
+                           → Telegram + /reports 딥링크
 ```
 
 ---
 
-## 상태 머신 규칙
+## 상태 머신 규칙 (Phase 2 버전)
 
 ```
 (빈값/신규)
-    ↓ "AI 분석" → 모달(stock_type + seed_memo 입력) → 생성
-  draft          ← AI 초안. Break Monitor 비활성.
+    ↓ "AI 분석" → 모달(stock_type + seed_memo + exploration_note 입력) → 생성
+  draft v1       ← AI 초안. Break Monitor 비활성.
     ↓ [선택] 피드백 반복
-    ↓ 사람이 confirm
-  confirmed      ← Break Monitor 활성 (daily_alert=True 시).
-    ↓ /analyze or /refine 재실행 후 저장
-  needs_review   ← Telegram needs_review 알림. Break Monitor 비활성.
-    ↓ 사람이 confirm
-  confirmed
+    ↓ 사람이 key_logic 입력 후 confirm
+  confirmed v1   ← Break Monitor 활성 (daily_alert=True 시).
+    ↓ "AI 분석" 재실행 (새 draft v2 생성, v1 그대로 유지)
+  confirmed v1 + draft v2
+    ↓ 사람이 v2 key_logic 입력 후 confirm
+  confirmed v2 + retired v1 (retirement_reason='superseded')
 ```
 
 **규칙:**
 - `confirmed` 상태가 아니면 Break Monitor 절대 발동하지 않음
 - AI가 임의로 `confirmed`로 바꾸지 않음 — 반드시 사람 액션 필요
-- confirmed → analyze/refine 저장 시: `needs_review` + Telegram 알림 발송
-- `/analyze` 저장 시: `confirmed` → `needs_review`, 그 외 → `draft`
+- confirmed thesis에서 AI 분석 → 새 버전 draft 생성 (기존 confirmed 유지, needs_review로 바뀌지 않음)
+- draft/needs_review thesis에서 AI 분석 → 동일 버전 in-place 수정
+- **Confirm 전 key_logic 필수** — "이 논리가 깨지면 thesis가 무너진다" 한 단락
 - **bulk Thesis 생성 없음** — 각 종목마다 stock_type + seed_memo 개별 입력 필수
 
 ---
 
-## Telegram 알림 (9종)
+## Telegram 알림 (7종)
 
 모두 `APP_URL` 환경변수 기반 딥링크 포함.
 
 | 함수 | 트리거 | 링크 |
 |---|---|---|
 | `notify_thesis_confirmed` | 사람이 Confirm 클릭 | `/tickers/{id}/thesis` |
-| `notify_thesis_needs_review` | confirmed 상태에서 AI 재분석 완료 | `/tickers/{id}/thesis` |
+| `notify_thesis_needs_review` | confirmed thesis에서 AI 새 버전 생성 완료 | `/tickers/{id}/thesis` |
 | `notify_break_monitor` | 08:00 Break Monitor 실행 | `/tickers/{id}/thesis` |
 | `notify_report_generated` | 종목 심층 분석 보고서 저장 | `/reports?id={id}` |
-| `notify_daily_briefing` | 07:00 데일리 브리핑 저장 | `/reports?id={id}` |
+| `notify_daily_briefing` | 월 08:00 주간 브리핑 저장 | `/reports?id={id}` |
 | `notify_macro_saved` | 매크로 보고서 저장 | `/reports?id={id}` |
-| `notify_discovery_saved` | 종목 탐색 보고서 저장 | `/reports?id={id}` |
-| `notify_portfolio_review_saved` | 포트폴리오 점검 보고서 저장 | `/reports?id={id}` |
 | `notify_trades_detected` | KIS 동기화 후 거래 감지 | `/journal` |
 
 ---
@@ -390,32 +418,37 @@ Frontend   React 18 + TypeScript + Vite + Tailwind CSS (darkMode: 'class')
            ThemeControls: 모든 페이지 헤더 공용 컴포넌트
 
 Backend    Python 3.11 + FastAPI + SSE
-           APScheduler (06:00 / 07:00 / 08:00 KST 3개 job)
-           8개 라우터: tickers / thesis / reports / portfolio / tradelog / ideas / market / settings
+           APScheduler (06:00 / 08:00 KST + 월 08:00 3개 job)
+           10개 라우터: tickers / thesis / reports / portfolio / tradelog / ideas /
+                        conversations / human_responses / market / settings
 
 Agent      Anthropic API
-           - claude-sonnet-4-6: thesis/report/break_monitor/briefing/discovery/portfolio-review/macro
-             max_tokens: thesis 4096, refine 4096, report 16000, briefing 8192,
-                         macro 4096, discovery 16000, portfolio-review 16000, break-monitor 1024
+           - claude-sonnet-4-6: thesis/report/break_monitor/weekly_briefing/macro
+             max_tokens: thesis 4096, refine 4096, report 16000, weekly_briefing 4096,
+                         macro 4096, break-monitor 1024
            - claude-haiku-4-5-20251001: SEC/DART 공시 요약 (max_tokens 600, 비용 절감)
-           SKILL.md 기반 스킬 시스템 (7개 스킬)
+           SKILL.md 기반 스킬 시스템 (6개 스킬: thesis-generator, report-generator,
+                                      break-monitor, macro-report, weekly-briefing, exploration-prompt-generator)
            .scratchpad/*.jsonl 로깅 (SCRATCHPAD_DIR=/app/.scratchpad)
 
 DB         PostgreSQL 15 (프로덕션: EC2 3.26.145.173)
-           10개 테이블: tickers / theses / reports / report_comments /
+           12개 테이블: tickers / theses / reports / report_comments /
                         portfolios / trade_logs / idea_memos / financial_cache /
-                        sec_filing_summaries / settings
+                        sec_filing_summaries / settings / conversation_imports / human_responses
            (alembic 없음, startup 마이그레이션)
            startup 시 자동 마이그레이션 순서:
+             0. ALTER TYPE enum ADD VALUE — AUTOCOMMIT 연결로 분리 (트랜잭션 블록 불가)
+                reporttypeenum: discovery, portfolio_review 추가
+                thesisstatusenum: retired 추가
              1. create_all() — 신규 테이블/enum 생성
-             2. ReportTypeEnum 값 이름 변경 (ANALYSIS→analysis, DAILY_BRIEF→daily_brief, MACRO→macro)
-             3. ReportTypeEnum 신규 값 추가 (discovery, portfolio_review)
-             4. is_read BOOLEAN 컬럼 추가 (reports)
-             5. report_comments 테이블 생성
-             6. TradeActionEnum 생성 + trade_logs 테이블 생성
-             7. idea_memos 테이블 생성
-             8. stock_type VARCHAR(50) 컬럼 추가 (theses)
-             9. seed_memo TEXT 컬럼 추가 (theses)
+             2. ReportTypeEnum 값 이름 변경 (ANALYSIS→analysis 등)
+             3. is_read BOOLEAN 컬럼 추가 (reports)
+             4. report_comments 테이블 생성
+             5. TradeActionEnum 생성 + trade_logs 테이블 생성
+             6. idea_memos 테이블 생성
+             7. stock_type / seed_memo 컬럼 추가 (theses)
+             8. Phase 2: theses unique 제약 제거 + version_number/key_logic 등 컬럼 추가
+             9. conversation_imports / human_responses 테이블 생성
 
 External   yfinance: US 기본 소스 (재무제표+지표+뉴스 통합, 24h TTL)
                     ETF 감지(quoteType=ETF) 시 ETF 전용 metrics 수집 (totalAssets/NAV/yield/beta 등)
@@ -480,25 +513,23 @@ Deploy     EC2 (ap-southeast-2, 3.26.145.173) + Docker Compose + nginx
   - special_situation: 이벤트 무산 리스크, 타임라인 연장
 - stock_type 없는 기존 confirmed 종목: 공통 신호 기준으로 판단
 - 출력: intact / weakening / broken
+- **Phase 3 예정**: key_logic 기준으로 "무엇이 바뀌었는가"만 출력, 레이블 없음 → 판정은 사람이
 
-### daily-briefing/SKILL.md
-- 입력: 뉴스(종목별 3건) + 포트폴리오 현재가 + 매크로 지표
-- 3섹션: macro / portfolio_summary / watchlist
-- max_tokens=8192 (포트폴리오 종목 수에 비례)
+### weekly-briefing/SKILL.md
+- **daily-briefing 대체** (월 08:00)
+- 3섹션: macro_changes / break_summary / upcoming_events
+- max_tokens=4096
+
+### exploration-prompt-generator/SKILL.md
+- 외부 Claude 탐색용 프롬프트 생성 (LLM 호출 없음, DB 데이터 조립)
+- 유형: discovery (Reports 페이지) / portfolio_review (Reports 페이지)
+         deep_analysis / thesis_challenge (Thesis 페이지)
+- API: GET /api/reports/explore-prompt?type=... (전체 포트폴리오 기준)
+       GET /api/tickers/{id}/explore-prompt?type=... (종목별 보고서/thesis 포함)
 
 ### macro-report/SKILL.md
 - 3섹션: market_overview / macro_factors / portfolio_implication
 - max_tokens=4096
-
-### stock-discovery/SKILL.md
-- **렌즈(lens) 파라미터**: compounding/growth/asset-play/turnaround/cyclical/special-situation/다양하게
-- 렌즈별 스크리닝 기준 적용. "다양하게"는 6개 렌즈 혼합
-- 5섹션: theme_analysis / us_picks / kr_picks / screening_criteria / next_steps
-- max_tokens=16000
-
-### portfolio-review/SKILL.md
-- 5섹션: portfolio_overview / holdings_assessment / concentration_risk / thesis_health_check / action_items
-- max_tokens=16000
 
 ---
 

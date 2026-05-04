@@ -70,7 +70,7 @@ def _load_refs(refs_dir: Path) -> str:
 
 # ── Thesis Generator ──────────────────────────────────────────────────────────
 
-SECTION_NAMES = ["thesis", "risk", "key_assumptions", "valuation"]
+SECTION_NAMES = ["thesis", "risk", "key_assumptions", "valuation", "key_logic"]
 
 def _build_thesis_user_message(
     symbol: str, name: str, market: str, financial_context: str = "",
@@ -333,60 +333,32 @@ def generate_thesis(
 
 # ── Daily Briefing ────────────────────────────────────────────────────────────
 
-BRIEFING_SECTIONS = ["macro", "portfolio_summary", "watchlist"]
 
 
-def generate_daily_briefing(
-    portfolio: list[dict],
-    watchlist: list[dict],
+def generate_weekly_briefing(
+    portfolio_summary: list[dict],
     macro_context: str = "",
 ) -> dict:
-    """
-    데일리 브리핑 생성.
-    portfolio/watchlist 항목에 news, daily_pct, current_price 포함 가능.
-    반환: {macro, portfolio_summary, watchlist, full_text}
-    """
+    """주간 브리핑 생성 (월요일 08:00). 반환: {break_summary, upcoming_events, macro_changes, full_text}"""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
-    _log({"event": "briefing_start", "portfolio_count": len(portfolio), "watchlist_count": len(watchlist)})
+    _log({"event": "weekly_briefing_start", "portfolio_count": len(portfolio_summary)})
 
-    skill = _load_skill("daily-briefing")
+    skill = _load_skill("weekly-briefing")
     system_prompt = skill["instructions"]
 
-    def fmt_price(t: dict) -> str:
-        price = t.get("current_price")
-        if price is None:
-            return ""
-        if t.get("market") == "KR_Stock":
-            return f"{price:,.0f}원"
-        return f"${price:,.2f}"
+    macro_block = f"\n## 매크로 지표\n{macro_context}\n" if macro_context else ""
+    portfolio_block = "\n".join(
+        f"- {t['name']} ({t['symbol']}, {t.get('status', '')})"
+        for t in portfolio_summary
+    ) or "없음"
 
-    def fmt_ticker(t: dict) -> str:
-        line = f"- **{t['symbol']}** ({t['name']}): thesis={t.get('thesis_status', 'none')}"
-        price = fmt_price(t)
-        if price:
-            pct = t.get("daily_pct", 0) or 0
-            sign = "+" if pct >= 0 else ""
-            line += f" | 현재가 {price} ({sign}{pct:.1f}%)"
-        news = t.get("news_snippet", "")
-        if news:
-            line += f"\n  최근 뉴스:\n{news}"
-        return line
-
-    def fmt_tickers(items: list[dict]) -> str:
-        return "\n".join(fmt_ticker(t) for t in items) if items else "없음"
-
-    macro_block = f"\n## 오늘의 시장 지표\n{macro_context}\n" if macro_context else ""
-
-    user_message = f"""오늘의 데일리 브리핑을 생성해 주세요.
+    user_message = f"""이번 주 투자 모니터링 브리핑을 생성해 주세요.
 {macro_block}
-## 포트폴리오 종목
-{fmt_tickers(portfolio)}
-
-## 관심 종목
-{fmt_tickers(watchlist)}
+## 모니터링 대상 종목
+{portfolio_block}
 
 3개 섹션을 XML 태그로 감싸서 출력해 주세요.
 """
@@ -394,19 +366,19 @@ def generate_daily_briefing(
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=8192,
+        max_tokens=4096,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
     full_text = message.content[0].text
 
     sections: dict = {"full_text": full_text}
-    for sec in BRIEFING_SECTIONS:
+    for sec in ["break_summary", "upcoming_events", "macro_changes"]:
         pattern = rf'<section name="{sec}">(.*?)</section>'
         m = re.search(pattern, full_text, re.DOTALL)
         sections[sec] = m.group(1).strip() if m else ""
 
-    _log({"event": "briefing_complete"})
+    _log({"event": "weekly_briefing_complete"})
     return sections
 
 
@@ -613,144 +585,6 @@ signal 태그와 3개 섹션을 출력해 주세요.
 
     _log({"event": "break_monitor_complete", "ticker_id": ticker_id, "symbol": symbol, "signal": signal})
     return result
-
-
-# ── Portfolio Review ──────────────────────────────────────────────────────────
-
-PORTFOLIO_REVIEW_SECTIONS = [
-    "portfolio_overview",
-    "holdings_assessment",
-    "concentration_risk",
-    "thesis_health_check",
-    "action_items",
-]
-
-
-def generate_portfolio_review_stream(portfolio_context: str) -> Iterator[str]:
-    """
-    포트폴리오 전체 점검 보고서 SSE 스트림.
-    portfolio_context: 종목별 보유현황 + thesis + metrics 포맷 문자열.
-    이벤트: start | chunk | complete | error
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'ANTHROPIC_API_KEY not set'})}\n\n"
-        return
-
-    _log({"event": "portfolio_review_start"})
-
-    try:
-        skill = _load_skill("portfolio-review")
-    except FileNotFoundError as e:
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        return
-
-    system_prompt = skill["instructions"]
-    user_message = f"""현재 포트폴리오를 가치투자 관점에서 점검하고 5개 섹션 보고서를 작성해 주세요.
-
-{portfolio_context}
-
-5개 섹션을 XML 태그로 감싸서 출력해 주세요.
-모든 섹션을 반드시 완결해서 닫아 주세요.
-종목 탐색 보고서는 아이디어 발굴용이므로, 상세 종목 보고서처럼 과도하게 길게 쓰지 말고 핵심만 압축해 주세요.
-"""
-
-    yield f"data: {json.dumps({'type': 'start'})}\n\n"
-
-    client = anthropic.Anthropic(api_key=api_key)
-    full_text = ""
-
-    try:
-        with client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=16000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        ) as stream:
-            for text in stream.text_stream:
-                full_text += text
-                yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
-
-    except anthropic.APIError as e:
-        _log({"event": "portfolio_review_error", "error": str(e)})
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        return
-
-    sections: dict = {}
-    for sec in PORTFOLIO_REVIEW_SECTIONS:
-        m = re.search(rf'<section name="{sec}">(.*?)</section>', full_text, re.DOTALL)
-        sections[sec] = m.group(1).strip() if m else ""
-
-    _log({"event": "portfolio_review_complete",
-          "sections_found": [s for s in PORTFOLIO_REVIEW_SECTIONS if sections.get(s)]})
-    yield f"data: {json.dumps({'type': 'complete', 'sections': sections, 'full_text': full_text})}\n\n"
-
-
-# ── Stock Discovery ───────────────────────────────────────────────────────────
-
-DISCOVERY_SECTIONS = ["theme_analysis", "us_picks", "kr_picks", "screening_criteria", "next_steps"]
-
-
-def generate_discovery_stream(idea: str, lens: str = "다양하게") -> Iterator[str]:
-    """
-    투자 아이디어 → 미국/한국 유망 종목 탐색 보고서 SSE 스트림.
-    lens: compounding | growth | asset-play | turnaround | cyclical | special-situation | 다양하게
-    이벤트: start | chunk | complete | error
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'ANTHROPIC_API_KEY not set'})}\n\n"
-        return
-
-    _log({"event": "discovery_start", "idea_len": len(idea), "lens": lens})
-
-    try:
-        skill = _load_skill("stock-discovery")
-    except FileNotFoundError as e:
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        return
-
-    system_prompt = skill["instructions"]
-    user_message = f"""다음 투자 아이디어를 바탕으로 미국과 한국 상장 종목 중 유망 후보를 발굴해 주세요.
-
-**탐색 렌즈**: {lens}
-
-**투자 아이디어**
-{idea.strip()}
-
-5개 섹션을 XML 태그로 감싸서 출력해 주세요.
-모든 섹션을 반드시 완결해서 닫아 주세요.
-종목 탐색 보고서는 아이디어 발굴용이므로, 상세 종목 보고서처럼 과도하게 길게 쓰지 말고 핵심만 압축해 주세요.
-"""
-
-    yield f"data: {json.dumps({'type': 'start'})}\n\n"
-
-    client = anthropic.Anthropic(api_key=api_key)
-    full_text = ""
-
-    try:
-        with client.messages.stream(
-            model="claude-sonnet-4-6",
-            max_tokens=16000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        ) as stream:
-            for text in stream.text_stream:
-                full_text += text
-                yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
-
-    except anthropic.APIError as e:
-        _log({"event": "discovery_error", "error": str(e)})
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        return
-
-    sections: dict = {}
-    for sec in DISCOVERY_SECTIONS:
-        m = re.search(rf'<section name="{sec}">(.*?)</section>', full_text, re.DOTALL)
-        sections[sec] = m.group(1).strip() if m else ""
-
-    _log({"event": "discovery_complete", "sections_found": [s for s in DISCOVERY_SECTIONS if sections.get(s)]})
-    yield f"data: {json.dumps({'type': 'complete', 'sections': sections, 'full_text': full_text})}\n\n"
 
 
 # ── Macro Report ──────────────────────────────────────────────────────────────

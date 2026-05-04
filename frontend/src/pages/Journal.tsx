@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag, PenLine } from 'lucide-react'
+import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag, PenLine, Globe, ChevronDown, ChevronUp } from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { ThemeControls } from '../components/ThemeControls'
-import type { Ticker } from '../types'
+import type { Ticker, ConversationImport, ConversationImportType } from '../types'
 
 // ── TradeLog types & helpers ──────────────────────────────────────────────────
 
@@ -550,9 +550,202 @@ function IdeaComposer({ onCreated }: { onCreated: (memo: IdeaMemo) => void }) {
   )
 }
 
+// ── ConversationImport types & components ─────────────────────────────────────
+
+const IMPORT_TYPE_LABEL: Record<ConversationImportType, string> = {
+  discovery:        '종목 탐색',
+  thesis_challenge: 'Thesis 반대 논거',
+  portfolio_review: '포트폴리오 점검',
+  deep_analysis:    '종목 집중 분석',
+}
+
+const IMPORT_TYPE_COLOR: Record<ConversationImportType, string> = {
+  discovery:        'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  thesis_challenge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  portfolio_review: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
+  deep_analysis:    'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
+}
+
+function ConversationCard({
+  item,
+  onDelete,
+}: {
+  item: ConversationImport
+  onDelete: (id: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const type = item.import_type as ConversationImportType
+
+  return (
+    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${IMPORT_TYPE_COLOR[type] ?? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'}`}>
+            {IMPORT_TYPE_LABEL[type] ?? type}
+          </span>
+          {item.ticker_symbol && (
+            <span className="text-xs bg-violet-900/50 text-violet-600 dark:text-violet-300 border border-violet-800/50 px-2 py-0.5 rounded-full font-medium">
+              {item.ticker_name ? `${item.ticker_name} (${item.ticker_symbol})` : item.ticker_symbol}
+            </span>
+          )}
+        </div>
+        <button onClick={() => onDelete(item.id)} className="p-1 text-gray-700 hover:text-red-400 transition-colors flex-shrink-0">
+          <Trash2 size={13} />
+        </button>
+      </div>
+
+      <p className="mt-2 text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{item.summary}</p>
+
+      {item.raw_excerpt && (
+        <div className="mt-2">
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          >
+            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            원문 발췌
+          </button>
+          {expanded && (
+            <div className="mt-2 bg-gray-100 dark:bg-gray-800 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed whitespace-pre-wrap">{item.raw_excerpt}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      <p className="text-xs text-gray-500 dark:text-gray-600 mt-2">{fmtKST(item.created_at)}</p>
+    </div>
+  )
+}
+
+function ConversationComposer({
+  tickers,
+  onCreated,
+}: {
+  tickers: Ticker[]
+  onCreated: (item: ConversationImport) => void
+}) {
+  const [importType, setImportType] = useState<ConversationImportType>('discovery')
+  const [summary, setSummary] = useState('')
+  const [rawExcerpt, setRawExcerpt] = useState('')
+  const [showExcerpt, setShowExcerpt] = useState(false)
+  const [tickerId, setTickerId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit() {
+    if (!summary.trim()) { setError('핵심 요약을 입력하세요'); return }
+    setSaving(true)
+    setError('')
+    try {
+      const res = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          import_type: importType,
+          summary: summary.trim(),
+          raw_excerpt: rawExcerpt.trim() || null,
+          ticker_id: tickerId || null,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: '오류 발생' }))
+        setError(err.detail || '오류 발생')
+        return
+      }
+      const created: ConversationImport = await res.json()
+      onCreated(created)
+      setSummary('')
+      setRawExcerpt('')
+      setShowExcerpt(false)
+      setTickerId('')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl px-4 py-4 space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Globe size={14} className="text-blue-400 flex-shrink-0" />
+        <span className="text-sm font-medium text-gray-900 dark:text-white">외부 탐색 결과 가져오기</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+        {(Object.keys(IMPORT_TYPE_LABEL) as ConversationImportType[]).map(t => (
+          <button
+            key={t}
+            onClick={() => setImportType(t)}
+            className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+              importType === t
+                ? IMPORT_TYPE_COLOR[t] + ' border-transparent'
+                : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400'
+            }`}
+          >
+            {IMPORT_TYPE_LABEL[t]}
+          </button>
+        ))}
+      </div>
+
+      {(importType === 'deep_analysis' || importType === 'thesis_challenge') && (
+        <select
+          value={tickerId}
+          onChange={e => setTickerId(e.target.value)}
+          className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:border-blue-500"
+        >
+          <option value="">종목 연결 (선택)</option>
+          {tickers.map(t => (
+            <option key={t.id} value={t.id}>{t.name} ({t.symbol})</option>
+          ))}
+        </select>
+      )}
+
+      <textarea
+        value={summary}
+        onChange={e => setSummary(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit() }}
+        placeholder="핵심 인사이트를 요약하세요... (⌘Enter 저장)"
+        rows={4}
+        disabled={saving}
+        className="w-full bg-transparent text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none disabled:opacity-50"
+      />
+
+      <div className="flex items-center justify-between gap-2">
+        <button
+          onClick={() => setShowExcerpt(v => !v)}
+          className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+        >
+          {showExcerpt ? '▲ 원문 발췌 접기' : '▼ 원문 발췌 추가 (선택)'}
+        </button>
+        <button
+          onClick={submit}
+          disabled={saving || !summary.trim()}
+          className="flex items-center gap-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+        >
+          {saving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+          저장
+        </button>
+      </div>
+
+      {showExcerpt && (
+        <textarea
+          value={rawExcerpt}
+          onChange={e => setRawExcerpt(e.target.value)}
+          placeholder="Claude 대화에서 중요한 부분을 복사해 붙여넣으세요..."
+          rows={5}
+          disabled={saving}
+          className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-600 dark:text-gray-300 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-gray-400 dark:focus:border-gray-500 disabled:opacity-50"
+        />
+      )}
+
+      {error && <p className="text-xs text-red-500 dark:text-red-400">{error}</p>}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type Tab = 'trade' | 'idea'
+type Tab = 'trade' | 'idea' | 'conversation'
 
 export default function JournalPage() {
   const navigate = useNavigate()
@@ -569,11 +762,20 @@ export default function JournalPage() {
   const [ideas, setIdeas] = useState<IdeaMemo[]>([])
   const [ideasLoading, setIdeasLoading] = useState(true)
 
+  // conversation import state
+  const [conversations, setConversations] = useState<ConversationImport[]>([])
+  const [conversationsLoading, setConversationsLoading] = useState(false)
+  const [conversationsLoaded, setConversationsLoaded] = useState(false)
+
   useEffect(() => {
     fetchLogs()
     fetchIdeas()
     fetch('/api/tickers').then(r => r.ok ? r.json() : []).then(setTickers).catch(() => null)
   }, [])
+
+  useEffect(() => {
+    if (tab === 'conversation' && !conversationsLoaded) fetchConversations()
+  }, [tab])
 
   async function fetchLogs() {
     setLogsLoading(true)
@@ -623,6 +825,27 @@ export default function JournalPage() {
     if (res.ok || res.status === 204) setIdeas(prev => prev.filter(m => m.id !== id))
   }
 
+  async function fetchConversations() {
+    setConversationsLoading(true)
+    try {
+      const res = await fetch('/api/conversations')
+      if (res.ok) setConversations(await res.json())
+    } finally {
+      setConversationsLoading(false)
+      setConversationsLoaded(true)
+    }
+  }
+
+  function handleConversationCreated(item: ConversationImport) {
+    setConversations(prev => [item, ...prev])
+  }
+
+  async function handleConversationDeleted(id: string) {
+    if (!confirm('이 탐색 결과를 삭제할까요?')) return
+    const res = await fetch(`/api/conversations/${id}`, { method: 'DELETE' })
+    if (res.ok || res.status === 204) setConversations(prev => prev.filter(c => c.id !== id))
+  }
+
   const filtered = tradeFilter === 'unnoted' ? logs.filter(l => !l.note) : logs
   const unnoted = logs.filter(l => !l.note).length
   const groupedLogs = groupByDate(filtered, 'detected_at')
@@ -641,6 +864,7 @@ export default function JournalPage() {
               <h1 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white">투자 일지</h1>
             </div>
             {tab === 'trade' && unnoted > 0 && (
+
               <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-700 dark:text-amber-200 font-medium px-2 py-0.5 rounded-full">
                 미작성 {unnoted}건
               </span>
@@ -671,6 +895,20 @@ export default function JournalPage() {
               {ideas.length > 0 && (
                 <span className="bg-violet-100 text-violet-700 dark:bg-violet-700 dark:text-violet-200 text-xs px-1.5 py-0 rounded-full leading-5">
                   {ideas.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setTab('conversation')}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
+                tab === 'conversation' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+              }`}
+            >
+              <Globe size={12} />
+              탐색결과
+              {conversations.length > 0 && (
+                <span className="bg-blue-100 text-blue-700 dark:bg-blue-700 dark:text-blue-200 text-xs px-1.5 py-0 rounded-full leading-5">
+                  {conversations.length}
                 </span>
               )}
             </button>
@@ -786,6 +1024,34 @@ export default function JournalPage() {
                 ))}
               </section>
             ))}
+          </>
+        )}
+
+        {/* ── 탐색결과 탭 ── */}
+        {tab === 'conversation' && (
+          <>
+            <ConversationComposer tickers={tickers} onCreated={handleConversationCreated} />
+
+            {conversationsLoading && <p className="text-gray-400 dark:text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
+            {!conversationsLoading && conversations.length === 0 && (
+              <div className="text-center py-16 space-y-2">
+                <Globe size={32} className="text-gray-700 mx-auto" />
+                <p className="text-gray-400 dark:text-gray-500 text-sm">아직 저장된 탐색 결과가 없습니다.</p>
+                <p className="text-gray-500 dark:text-gray-600 text-xs">보고서 페이지에서 탐색 프롬프트를 복사해 외부 Claude와 대화하세요.</p>
+              </div>
+            )}
+
+            {conversations.length > 0 && (
+              <div className="space-y-3">
+                {conversations.map(item => (
+                  <ConversationCard
+                    key={item.id}
+                    item={item}
+                    onDelete={handleConversationDeleted}
+                  />
+                ))}
+              </div>
+            )}
           </>
         )}
 

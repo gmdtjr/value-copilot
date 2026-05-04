@@ -5,8 +5,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from models.db import SessionLocal, Ticker, Report, FinancialCache, Portfolio, TickerStatusEnum, ThesisStatusEnum, ReportTypeEnum
-from services.agent import generate_daily_briefing, run_break_monitor
-from services.telegram import notify_break_monitor, notify_daily_briefing
+from services.agent import run_break_monitor
+from services.telegram import notify_break_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -29,19 +29,6 @@ def _get_cache(db, ticker_id: str, data_type: str):
     if row and row.expires_at > datetime.utcnow():
         return row.data
     return None
-
-
-def _fmt_news_snippet(news_data, limit: int = 3) -> str:
-    """뉴스 캐시 데이터 → 짧은 문자열."""
-    if not news_data or not isinstance(news_data, list):
-        return ""
-    lines = []
-    for n in news_data[:limit]:
-        date = (n.get("date") or "")[:10]
-        title = n.get("title", "").strip()
-        if title:
-            lines.append(f"  [{date}] {title}")
-    return "\n".join(lines)
 
 
 def _fmt_news_full(news_data, limit: int = 7) -> str:
@@ -82,74 +69,15 @@ def _fmt_metrics(metrics_data) -> str:
     )
 
 
-def run_daily_briefing():
-    logger.info("Daily briefing job started")
-    db = SessionLocal()
-    try:
-        # 매크로 지표
-        macro_context = ""
-        try:
-            from services.market_data import get_market_indicators
-            indicators = get_market_indicators()
-            vix = indicators.get("vix")
-            sp500 = indicators.get("sp500")
-            kospi = indicators.get("kospi")
-            fg = indicators.get("fear_greed")
-            parts = []
-            if vix:
-                parts.append(f"VIX {vix.get('price', 'N/A')} ({vix.get('change_pct', 'N/A')}%)")
-            if sp500:
-                parts.append(f"S&P500 {sp500.get('price', 'N/A')} ({sp500.get('change_pct', 'N/A')}%)")
-            if kospi:
-                parts.append(f"KOSPI {kospi.get('price', 'N/A')} ({kospi.get('change_pct', 'N/A')}%)")
-            if fg:
-                parts.append(f"Fear&Greed {fg.get('score', 'N/A')} ({fg.get('rating', '')})")
-            macro_context = " | ".join(parts)
-        except Exception:
-            logger.warning("Macro indicators fetch failed for briefing")
-
-        tickers = db.query(Ticker).all()
-
-        def build_ticker_dict(t) -> dict:
-            d = {
-                "symbol": t.symbol, "name": t.name, "market": t.market.value,
-                "thesis_status": t.thesis.confirmed.value if t.thesis else None,
-            }
-            # 포트폴리오 가격 데이터
-            if t.portfolio:
-                d["current_price"] = t.portfolio.current_price
-                d["daily_pct"] = t.portfolio.daily_pct
-            # 뉴스 (캐시에서)
-            news_data = _get_cache(db, str(t.id), "news")
-            snippet = _fmt_news_snippet(news_data, limit=3)
-            if snippet:
-                d["news_snippet"] = snippet
-            return d
-
-        portfolio = [build_ticker_dict(t) for t in tickers if t.status == TickerStatusEnum.PORTFOLIO]
-        watchlist = [build_ticker_dict(t) for t in tickers if t.status == TickerStatusEnum.WATCHLIST]
-
-        sections = generate_daily_briefing(portfolio, watchlist, macro_context=macro_context)
-
-        report = Report(ticker_id=None, type=ReportTypeEnum.DAILY_BRIEF, content=sections["full_text"])
-        db.add(report)
-        db.commit()
-        logger.info("Daily briefing saved (report_id=%s)", report.id)
-
-        notify_daily_briefing(str(report.id), sections.get("macro", ""))
-    except Exception:
-        logger.exception("Daily briefing job failed")
-    finally:
-        db.close()
-
-
 def run_break_monitor_job():
     """confirmed + daily_alert=True 종목 Break Monitor 실행."""
     logger.info("Break Monitor job started")
     db = SessionLocal()
     try:
+        from sqlalchemy.orm import selectinload
         tickers = (
             db.query(Ticker)
+            .options(selectinload(Ticker.theses))
             .filter(Ticker.daily_alert == True)  # noqa: E712
             .all()
         )
@@ -185,6 +113,65 @@ def run_break_monitor_job():
                 logger.info("Break Monitor %s → %s", ticker.symbol, result["signal"])
             except Exception:
                 logger.exception("Break Monitor 실패: %s", ticker.symbol)
+    finally:
+        db.close()
+
+
+def run_weekly_briefing_job():
+    """월요일 08:00 KST — 주간 브리핑 (Break Signal 요약 + 매크로 변화)."""
+    logger.info("Weekly briefing job started")
+    db = SessionLocal()
+    try:
+        from services.agent import generate_weekly_briefing
+        from services.telegram import notify_daily_briefing
+
+        # 매크로 지표
+        macro_context = ""
+        try:
+            from services.market_data import get_market_indicators
+            indicators = get_market_indicators()
+            vix = indicators.get("vix")
+            sp500 = indicators.get("sp500")
+            kospi = indicators.get("kospi")
+            fg = indicators.get("fear_greed")
+            parts = []
+            if vix:
+                parts.append(f"VIX {vix.get('price', 'N/A')} ({vix.get('change_pct', 'N/A')}%)")
+            if sp500:
+                parts.append(f"S&P500 {sp500.get('price', 'N/A')} ({sp500.get('change_pct', 'N/A')}%)")
+            if kospi:
+                parts.append(f"KOSPI {kospi.get('price', 'N/A')} ({kospi.get('change_pct', 'N/A')}%)")
+            if fg:
+                parts.append(f"Fear&Greed {fg.get('score', 'N/A')} ({fg.get('rating', '')})")
+            macro_context = " | ".join(parts)
+        except Exception:
+            logger.warning("Macro indicators fetch failed for weekly briefing")
+
+        from sqlalchemy.orm import selectinload
+        tickers = (
+            db.query(Ticker)
+            .options(selectinload(Ticker.theses))
+            .filter(Ticker.daily_alert == True)  # noqa: E712
+            .all()
+        )
+        portfolio_summary = []
+        for t in tickers:
+            if t.thesis and t.thesis.confirmed == ThesisStatusEnum.CONFIRMED:
+                portfolio_summary.append({
+                    "symbol": t.symbol,
+                    "name": t.name,
+                    "status": t.status.value,
+                })
+
+        sections = generate_weekly_briefing(portfolio_summary, macro_context=macro_context)
+
+        report = Report(ticker_id=None, type=ReportTypeEnum.DAILY_BRIEF, content=sections["full_text"])
+        db.add(report)
+        db.commit()
+        logger.info("Weekly briefing saved (report_id=%s)", report.id)
+        notify_daily_briefing(str(report.id), sections.get("macro_changes", ""))
+    except Exception:
+        logger.exception("Weekly briefing job failed")
     finally:
         db.close()
 
@@ -332,19 +319,19 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.add_job(
-        run_daily_briefing,
-        CronTrigger(hour=7, minute=0, timezone="Asia/Seoul"),
-        id="daily_briefing",
-        replace_existing=True,
-    )
-    scheduler.add_job(
         run_break_monitor_job,
         CronTrigger(hour=8, minute=0, timezone="Asia/Seoul"),
         id="break_monitor",
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_weekly_briefing_job,
+        CronTrigger(day_of_week="mon", hour=8, minute=0, timezone="Asia/Seoul"),
+        id="weekly_briefing",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("Scheduler started — light_refresh 06:00 / briefing 07:00 / break_monitor 08:00 KST")
+    logger.info("Scheduler started — light_refresh 06:00 / break_monitor 08:00 / weekly_briefing Mon 08:00 KST")
 
 
 def stop_scheduler():
