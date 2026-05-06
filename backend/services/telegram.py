@@ -50,14 +50,14 @@ def notify_thesis_needs_review(symbol: str, name: str, market: str, ticker_id: s
     )
 
 
-def notify_break_monitor(symbol: str, name: str, signal: str, assessment: str, ticker_id: str = "") -> None:
-    icon = {"intact": "✅", "weakening": "⚠️", "broken": "🚨"}.get(signal, "❓")
-    link = f'\n🔗 <a href="{_thesis_link(ticker_id)}">Thesis 보기</a>' if ticker_id else ""
+def notify_break_monitor(symbol: str, name: str, observations: str, ticker_id: str = "") -> None:
+    """Break Monitor 관찰 결과 알림. verdict는 사람이 앱에서 직접 입력."""
+    thesis_link = f'\n🔲 <a href="{_thesis_link(ticker_id)}">Verdict 입력하기</a>' if ticker_id else ""
+    snippet = observations[:350] if observations else "(관찰 없음)"
     send_message(
-        f"{icon} <b>Break Monitor — {symbol}</b> ({name})\n"
-        f"신호: <b>{signal.upper()}</b>\n\n"
-        f"{assessment[:400] if assessment else ''}"
-        f"{link}"
+        f"🔍 <b>Break Monitor — {symbol}</b> ({name})\n\n"
+        f"{snippet}\n"
+        f"{thesis_link}"
     )
 
 
@@ -86,6 +86,18 @@ def notify_macro_saved(report_id: str) -> None:
     now_kst = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M KST")
     link = f'\n🔗 <a href="{_report_link(report_id)}">매크로 보고서 보기</a>'
     send_message(f"📊 <b>매크로 보고서 생성 완료</b> — {now_kst}{link}")
+
+
+def notify_cycle_closed(symbol: str, name: str, pnl_pct: float | None, cycle_id: str = "") -> None:
+    """매도 감지 → 복기 시작 요청."""
+    pnl_str = f" ({pnl_pct:+.1f}%)" if pnl_pct is not None else ""
+    link = f'\n🔗 <a href="{APP_URL}/journal">복기 작성하기</a>' if APP_URL else ""
+    send_message(
+        f"📝 <b>{symbol} 청산{pnl_str}</b> — {name}\n\n"
+        f"이번 투자를 돌아보세요.\n"
+        f"처음 논리가 맞았나요? 무엇이 달랐나요?"
+        f"{link}"
+    )
 
 
 def notify_trades_detected(trades: list[dict]) -> None:

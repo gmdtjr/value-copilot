@@ -43,6 +43,7 @@ class ThesisResponse(BaseModel):
     version_number: int = 1
     parent_version_id: Optional[str] = None
     key_logic: Optional[str] = None
+    monitoring_contract: Optional[str] = None
     exploration_note: Optional[str] = None
     retired_at: Optional[str] = None
     retirement_reason: Optional[str] = None
@@ -54,11 +55,13 @@ class ThesisPatch(BaseModel):
     key_assumptions: Optional[str] = None
     valuation: Optional[str] = None
     key_logic: Optional[str] = None
+    monitoring_contract: Optional[str] = None
     exploration_note: Optional[str] = None
 
 
 class ConfirmBody(BaseModel):
-    key_logic: Optional[str] = None  # 설정되어 있지 않으면 thesis.key_logic 사용
+    key_logic: Optional[str] = None  # legacy fallback. 새 workflow에서는 monitoring_contract 사용.
+    monitoring_contract: Optional[str] = None
 
 
 @router.get("/{ticker_id}", response_model=ThesisResponse)
@@ -87,6 +90,8 @@ def patch_thesis(ticker_id: str, body: ThesisPatch, db: Session = Depends(get_db
     thesis = _active_thesis(db, ticker_id)
     if not thesis:
         raise HTTPException(status_code=404, detail="Thesis not found")
+    if thesis.confirmed == ThesisStatusEnum.CONFIRMED:
+        raise HTTPException(status_code=400, detail="Confirmed thesis는 직접 수정할 수 없습니다. 새 버전을 만든 뒤 수정하세요.")
 
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(thesis, field, value)
@@ -104,18 +109,24 @@ def confirm_thesis(ticker_id: str, body: ConfirmBody = ConfirmBody(), db: Sessio
     if not thesis.thesis:
         raise HTTPException(status_code=400, detail="Thesis 내용이 없습니다. 먼저 AI 분석을 실행하세요.")
 
-    # key_logic 설정 (body에 있으면 우선 사용, 없으면 기존 값 확인)
+    # Monitoring Contract가 새 framework의 confirm 기준이다.
+    # key_logic은 기존 confirmed thesis 호환용 fallback으로만 유지한다.
     if body.key_logic and body.key_logic.strip():
         thesis.key_logic = body.key_logic.strip()
+    if body.monitoring_contract and body.monitoring_contract.strip():
+        thesis.monitoring_contract = body.monitoring_contract.strip()
 
-    # key_logic은 Phase 2 필드 — DB에 없을 수 있으므로 getattr으로 안전하게 체크
+    # monitoring_contract가 있으면 Break Monitor의 1차 기준, 없으면 key_logic으로 호환
+    current_contract = getattr(thesis, 'monitoring_contract', None)
+    if current_contract and not current_contract.strip():
+        current_contract = None
     current_key_logic = getattr(thesis, 'key_logic', None)
     if current_key_logic and not current_key_logic.strip():
         current_key_logic = None
-    if not current_key_logic:
+    if not current_contract and not current_key_logic:
         raise HTTPException(
             status_code=400,
-            detail="key_logic이 필요합니다. '이 논리가 깨지면 thesis가 무너진다'는 한 단락을 입력하세요."
+            detail="Monitoring Contract가 필요합니다. Break Monitor가 감시할 Core Logic, Break Conditions, Strengthening Signals, Watch Metrics를 입력하세요."
         )
 
     # 이전의 confirmed/needs_review 버전 retire (Phase 2 DB에서만 동작)
@@ -174,12 +185,43 @@ def create_new_version(ticker_id: str, db: Session = Depends(get_db)):
         seed_memo=current.seed_memo,
         exploration_note=current.exploration_note,
         key_logic=current.key_logic,
+        monitoring_contract=getattr(current, 'monitoring_contract', None),
     )
     db.add(new_thesis)
     db.commit()
     db.refresh(new_thesis)
     logger.info("New thesis version v%s created for ticker_id=%s", new_v, ticker_id)
     return _to_response(new_thesis)
+
+
+@router.delete("/versions/{thesis_id}", status_code=204)
+def delete_thesis_version(thesis_id: str, db: Session = Depends(get_db)):
+    """특정 thesis 버전 삭제. draft/needs_review/retired 모두 가능.
+    confirmed 버전은 해당 ticker의 유일한 active thesis인 경우 삭제 불가."""
+    thesis = db.query(Thesis).filter(Thesis.id == thesis_id).first()
+    if not thesis:
+        raise HTTPException(status_code=404, detail="Thesis not found")
+
+    # confirmed 상태이고 다른 non-retired 버전이 없으면 삭제 불가
+    if thesis.confirmed == ThesisStatusEnum.CONFIRMED:
+        other_active = (
+            db.query(Thesis)
+            .filter(
+                Thesis.ticker_id == thesis.ticker_id,
+                Thesis.id != thesis.id,
+                Thesis.confirmed != ThesisStatusEnum.RETIRED,
+            )
+            .first()
+        )
+        if not other_active:
+            raise HTTPException(
+                status_code=400,
+                detail="현재 유일한 confirmed thesis는 삭제할 수 없습니다. 새 버전을 만들어 Confirm한 후 삭제하거나, 종목 삭제를 사용하세요."
+            )
+
+    db.delete(thesis)
+    db.commit()
+    logger.info("Thesis version deleted: thesis_id=%s", thesis_id)
 
 
 def _to_response(thesis: Thesis) -> ThesisResponse:
@@ -198,6 +240,7 @@ def _to_response(thesis: Thesis) -> ThesisResponse:
         version_number=thesis.version_number or 1,
         parent_version_id=str(thesis.parent_version_id) if thesis.parent_version_id else None,
         key_logic=thesis.key_logic,
+        monitoring_contract=getattr(thesis, 'monitoring_contract', None),
         exploration_note=thesis.exploration_note,
         retired_at=thesis.retired_at.isoformat() if thesis.retired_at else None,
         retirement_reason=thesis.retirement_reason,

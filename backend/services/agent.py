@@ -70,16 +70,28 @@ def _load_refs(refs_dir: Path) -> str:
 
 # ── Thesis Generator ──────────────────────────────────────────────────────────
 
-SECTION_NAMES = ["thesis", "risk", "key_assumptions", "valuation", "key_logic"]
+SECTION_NAMES = ["thesis", "risk", "key_assumptions", "valuation", "monitoring_contract"]
+THESIS_MAX_TOKENS = 8192
 
 def _build_thesis_user_message(
     symbol: str, name: str, market: str, financial_context: str = "",
-    stock_type: str = "", seed_memo: str = "",
+    stock_type: str = "", seed_memo: str = "", exploration_note: str = "",
+    monitoring_contract: str = "",
 ) -> str:
     fin_block = (
         f"\n{financial_context}\n"
         if financial_context
         else "\n*(재무 데이터 미제공 — 공개 정보 기반으로 작성하되 불확실한 수치는 '데이터 수집 필요'로 표시)*\n"
+    )
+    exploration_block = (
+        f"\n**외부 탐색 인사이트 (exploration_note)**\n{exploration_note}\n"
+        if exploration_note
+        else ""
+    )
+    monitoring_block = (
+        f"\n**외부 대화에서 확정한 Monitoring Contract**\n{monitoring_contract}\n"
+        if monitoring_contract
+        else ""
     )
     return f"""다음 종목의 투자 thesis를 생성해 주세요.
 
@@ -91,15 +103,17 @@ def _build_thesis_user_message(
 
 **나의 초기 관점 (seed_memo)**
 {seed_memo}
-{fin_block}
-위 초기 관점과 투자 유형 프레임워크를 기반으로 아래 4개 섹션을 XML 태그로 감싸서 출력해 주세요.
+{exploration_block}{monitoring_block}{fin_block}
+위 초기 관점과 투자 유형 프레임워크를 기반으로 아래 5개 섹션을 XML 태그로 감싸서 출력해 주세요.
 각 섹션은 마크다운으로 작성하고 충분한 분량(섹션당 최소 200자)으로 작성하세요.
 재무 데이터가 제공된 경우 실제 수치를 반드시 인용하고, valuation 섹션의 가정은 제공된 재무 데이터와 선택된 프레임워크를 근거로 작성하세요.
+Monitoring Contract가 제공된 경우 새로 발명하지 말고, 외부 대화에서 확정한 논리를 우선 보존하되 재무 데이터와 충돌하는 수치만 보수적으로 정정하세요.
 
 <section name="thesis">투자 논거 (핵심 thesis, 비즈니스 모델, 투자 유형에 맞는 핵심 강점)</section>
 <section name="risk">주요 리스크 (사업 리스크, 재무 리스크, 시장 리스크, 외부 요인)</section>
 <section name="key_assumptions">핵심 가정 (thesis가 유효하려면 참이어야 할 조건들 — 투자 유형 기준으로, 측정 가능한 수치 기반으로)</section>
 <section name="valuation">밸류에이션 (투자 유형에 맞는 방법론, 적정가 추정)</section>
+<section name="monitoring_contract">Break Monitor가 그대로 사용할 감시 계약서. Core Logic / Break Conditions / Strengthening Signals / Watch Metrics 형식으로 작성</section>
 """
 
 
@@ -111,9 +125,11 @@ def generate_thesis_stream(
     financial_context: str = "",
     stock_type: str = "compounding",
     seed_memo: str = "",
+    exploration_note: str = "",
+    monitoring_contract: str = "",
 ) -> Iterator[str]:
     """
-    Thesis 4섹션 AI 초안을 SSE 이벤트로 스트림.
+    Thesis 5섹션 AI 초안을 SSE 이벤트로 스트림.
     financial_context: fetch_all() 결과를 포맷한 문자열 (없으면 종목명만으로 생성).
     stock_type: 투자 유형 (compounding/growth/asset_play/turnaround/cyclical/special_situation)
     seed_memo: 사용자의 초기 관점 (필수)
@@ -121,7 +137,7 @@ def generate_thesis_stream(
     이벤트 타입:
       - start   : 생성 시작
       - chunk   : 텍스트 청크 (실시간 스트리밍)
-      - complete: 완료 + 파싱된 4섹션
+      - complete: 완료 + 파싱된 5섹션
       - error   : 오류
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -146,8 +162,16 @@ def generate_thesis_stream(
         framework = framework_path.read_text(encoding="utf-8")
         system_prompt += f"\n\n---\n\n# 투자 프레임워크 ({stock_type})\n\n{framework}"
 
-    user_message = _build_thesis_user_message(symbol, name, market, financial_context,
-                                               stock_type=stock_type, seed_memo=seed_memo)
+    user_message = _build_thesis_user_message(
+        symbol,
+        name,
+        market,
+        financial_context,
+        stock_type=stock_type,
+        seed_memo=seed_memo,
+        exploration_note=exploration_note,
+        monitoring_contract=monitoring_contract,
+    )
 
     yield f"data: {json.dumps({'type': 'start', 'symbol': symbol})}\n\n"
 
@@ -157,7 +181,7 @@ def generate_thesis_stream(
     try:
         with client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=THESIS_MAX_TOKENS,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         ) as stream:
@@ -233,12 +257,13 @@ def refine_thesis_stream(
 {fmt_section("risk", "리스크")}
 {fmt_section("key_assumptions", "핵심 가정")}
 {fmt_section("valuation", "밸류에이션")}
+{fmt_section("monitoring_contract", "Monitoring Contract")}
 
 **사람의 피드백 (이 내용을 반드시 반영하여 수정하세요)**
 {feedback}
 
 피드백을 충실히 반영하되, 피드백이 언급하지 않은 섹션도 전체적 일관성을 위해 필요 시 보완하세요.
-아래 4개 섹션을 각각 XML 태그로 감싸서 출력해 주세요.
+아래 5개 섹션을 각각 XML 태그로 감싸서 출력해 주세요.
 각 섹션은 마크다운으로 작성하고 충분한 분량(섹션당 최소 200자)으로 작성하세요.
 기존 thesis에 실제 재무 수치가 포함되어 있으면 그 수치를 유지하거나 더 보완하세요.
 
@@ -246,6 +271,7 @@ def refine_thesis_stream(
 <section name="risk">주요 리스크 (사업 리스크, 재무 리스크, 시장 리스크, 외부 요인)</section>
 <section name="key_assumptions">핵심 가정 (thesis가 유효하려면 참이어야 할 조건들 — 측정 가능한 수치 기반으로)</section>
 <section name="valuation">밸류에이션 (DCF 가정, 적정가 추정, Margin of Safety)</section>
+<section name="monitoring_contract">Break Monitor가 그대로 사용할 감시 계약서. Core Logic / Break Conditions / Strengthening Signals / Watch Metrics 형식으로 작성</section>
 """
 
     yield f"data: {json.dumps({'type': 'start', 'symbol': symbol})}\n\n"
@@ -256,7 +282,7 @@ def refine_thesis_stream(
     try:
         with client.messages.stream(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=THESIS_MAX_TOKENS,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         ) as stream:
@@ -293,6 +319,8 @@ def generate_thesis(
     financial_context: str = "",
     stock_type: str = "compounding",
     seed_memo: str = "",
+    exploration_note: str = "",
+    monitoring_contract: str = "",
 ) -> dict:
     """Non-streaming version for bulk/Telegram. Returns sections dict."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -309,13 +337,21 @@ def generate_thesis(
         framework = framework_path.read_text(encoding="utf-8")
         system_prompt += f"\n\n---\n\n# 투자 프레임워크 ({stock_type})\n\n{framework}"
 
-    user_message = _build_thesis_user_message(symbol, name, market, financial_context,
-                                               stock_type=stock_type, seed_memo=seed_memo)
+    user_message = _build_thesis_user_message(
+        symbol,
+        name,
+        market,
+        financial_context,
+        stock_type=stock_type,
+        seed_memo=seed_memo,
+        exploration_note=exploration_note,
+        monitoring_contract=monitoring_contract,
+    )
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=THESIS_MAX_TOKENS,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
@@ -338,13 +374,15 @@ def generate_thesis(
 def generate_weekly_briefing(
     portfolio_summary: list[dict],
     macro_context: str = "",
+    signal_summaries: list[str] | None = None,
 ) -> dict:
     """주간 브리핑 생성 (월요일 08:00). 반환: {break_summary, upcoming_events, macro_changes, full_text}"""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
-    _log({"event": "weekly_briefing_start", "portfolio_count": len(portfolio_summary)})
+    _log({"event": "weekly_briefing_start", "portfolio_count": len(portfolio_summary),
+          "signals_count": len(signal_summaries or [])})
 
     skill = _load_skill("weekly-briefing")
     system_prompt = skill["instructions"]
@@ -354,9 +392,12 @@ def generate_weekly_briefing(
         f"- {t['name']} ({t['symbol']}, {t.get('status', '')})"
         for t in portfolio_summary
     ) or "없음"
+    signals_block = ""
+    if signal_summaries:
+        signals_block = "\n## 지난주 Break Monitor 관찰 이력\n" + "\n".join(f"- {s}" for s in signal_summaries) + "\n"
 
     user_message = f"""이번 주 투자 모니터링 브리핑을 생성해 주세요.
-{macro_block}
+{macro_block}{signals_block}
 ## 모니터링 대상 종목
 {portfolio_block}
 
@@ -517,73 +558,118 @@ def generate_ticker_report(
 
 # ── Break Monitor ─────────────────────────────────────────────────────────────
 
-SIGNAL_VALUES = {"intact", "weakening", "broken"}
-
-
 def run_break_monitor(
     symbol: str,
     name: str,
     ticker_id: str,
-    thesis: str,
-    key_assumptions: str,
+    key_logic: str = "",
+    monitoring_contract: str = "",
+    key_assumptions: str = "",
     news_context: str = "",
     metrics_context: str = "",
     stock_type: str = "",
 ) -> dict:
     """
-    Break Monitor 실행.
-    news_context: FinancialCache news 데이터 포맷 문자열
-    metrics_context: FinancialCache metrics TTM 포맷 문자열
-    stock_type: 투자 유형 (break 신호 분기에 사용)
-    반환: {signal, assessment, assumptions_status, watch_points}
+    Break Monitor 실행. LLM은 관찰만 출력, 판정(verdict)은 사람이 내림.
+    monitoring_contract: 사람이 confirmed한 감시 계약서 (최우선)
+    key_logic: legacy 논리 스냅샷 (contract 없으면 기존 데이터 호환용으로 사용)
+    반환: {observations, positive_signals, negative_signals, watch_items, key_logic_snapshot, full_text}
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
 
     _log({"event": "break_monitor_start", "ticker_id": ticker_id, "symbol": symbol,
-          "has_news": bool(news_context), "has_metrics": bool(metrics_context)})
+          "has_contract": bool(monitoring_contract), "has_key_logic": bool(key_logic), "has_news": bool(news_context)})
 
     skill = _load_skill("break-monitor")
     system_prompt = skill["instructions"]
 
-    news_block = f"\n## 최근 뉴스 (오늘 기준)\n{news_context}\n" if news_context else "\n*(뉴스 데이터 없음 — 논리적 유효성만 판단)*\n"
-    metrics_block = f"\n## 현재 Key Metrics (TTM)\n{metrics_context}\n" if metrics_context else ""
+    monitoring_criterion = monitoring_contract or key_logic or key_assumptions
+    criterion_label = (
+        "Monitoring Contract"
+        if monitoring_contract
+        else ("legacy 논리 스냅샷" if key_logic else "핵심 가정 (key_assumptions)")
+    )
 
-    stock_type_block = f"\n**투자 유형 (stock_type)**: {stock_type}\n" if stock_type else ""
-    user_message = f"""다음 종목의 thesis 이탈 여부를 판단해 주세요.
+    news_block = f"\n## 최근 뉴스 (오늘 기준)\n{news_context}\n" if news_context else "\n*(뉴스 데이터 없음)*\n"
+    metrics_block = f"\n## 현재 Key Metrics (TTM)\n{metrics_context}\n" if metrics_context else ""
+    stock_type_block = f"\n**투자 유형**: {stock_type}\n" if stock_type else ""
+
+    user_message = f"""다음 종목에 대해 오늘의 변화를 관찰해 주세요.
 
 **종목**: {symbol} — {name}
 {stock_type_block}
-**기존 Thesis**
-{thesis or '(없음)'}
-
-**핵심 가정 (Key Assumptions)**
-{key_assumptions or '(없음)'}
+**{criterion_label}**
+{monitoring_criterion or '(없음 — 공개 정보 기반으로 주요 변화 서술)'}
 {news_block}{metrics_block}
-signal 태그와 3개 섹션을 출력해 주세요.
+4개 섹션(observations, positive_signals, negative_signals, watch_items)을 출력해 주세요.
+verdict(판정)는 출력하지 마세요.
 """
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1024,
+        max_tokens=800,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
     full_text = message.content[0].text
 
-    signal_match = re.search(r"<signal>(.*?)</signal>", full_text)
-    signal = signal_match.group(1).strip().lower() if signal_match else "intact"
-    if signal not in SIGNAL_VALUES:
-        signal = "intact"
-
-    result: dict = {"signal": signal, "full_text": full_text}
-    for sec in ["assessment", "assumptions_status", "watch_points"]:
+    result: dict = {"full_text": full_text, "key_logic_snapshot": monitoring_contract or key_logic}
+    for sec in ["observations", "positive_signals", "negative_signals", "watch_items"]:
         m = re.search(rf'<section name="{sec}">(.*?)</section>', full_text, re.DOTALL)
         result[sec] = m.group(1).strip() if m else ""
 
-    _log({"event": "break_monitor_complete", "ticker_id": ticker_id, "symbol": symbol, "signal": signal})
+    _log({"event": "break_monitor_complete", "ticker_id": ticker_id, "symbol": symbol})
+    return result
+
+
+def generate_retrospective(
+    original_logic: str,
+    pnl_pct: float | None = None,
+    exit_reason: str = "",
+    signal_summaries: list[str] | None = None,
+) -> dict:
+    """복기 초안 생성. 반환: {what_changed, weak_link, next_time}"""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    _log({"event": "retrospective_start"})
+
+    skill = _load_skill("thesis-postmortem")
+    system_prompt = skill["instructions"]
+
+    pnl_block = f"\n**투자 결과**: {pnl_pct:+.1f}%\n" if pnl_pct is not None else ""
+    reason_block = f"\n**청산 이유**: {exit_reason}\n" if exit_reason else ""
+    signals_block = ""
+    if signal_summaries:
+        signals_block = "\n## 보유 기간 Break Monitor 관찰 이력\n" + "\n".join(f"- {s}" for s in signal_summaries) + "\n"
+
+    user_message = f"""다음 투자의 복기 초안을 작성해 주세요.
+
+## 진입 당시 Monitoring Contract / 논리 스냅샷 (변경 불가)
+{original_logic}
+{pnl_block}{reason_block}{signals_block}
+3개 섹션(what_changed, weak_link, next_time)을 XML 태그로 감싸서 출력해 주세요.
+"""
+
+    client = anthropic.Anthropic(api_key=api_key)
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}],
+    )
+    full_text = message.content[0].text
+
+    result: dict = {"full_text": full_text}
+    for sec in ["what_changed", "weak_link", "next_time"]:
+        m = re.search(rf'<section name="{sec}">(.*?)</section>', full_text, re.DOTALL)
+        result[sec] = m.group(1).strip() if m else ""
+
+    _log({"event": "retrospective_complete"})
     return result
 
 

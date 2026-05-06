@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 
 import uuid as _uuid
-from models.db import SessionLocal, Ticker, Thesis, Portfolio, MarketEnum, TickerStatusEnum, ThesisStatusEnum, TradeLog, TradeActionEnum
+from models.db import SessionLocal, Ticker, Thesis, Portfolio, MarketEnum, TickerStatusEnum, ThesisStatusEnum, TradeLog, TradeActionEnum, InvestmentCycle, CycleStatusEnum, Retrospective
 from services.kis import KISClient, load_accounts, get_exchange_rate
 
 logger = logging.getLogger(__name__)
@@ -186,23 +186,146 @@ def sync_portfolio() -> dict:
                 "avg_price_after": avg_after,
             })
 
-        # TradeLog DB 저장
+        # TradeLog DB 저장 + InvestmentCycle 처리
+        sell_cycles: list[tuple] = []  # (symbol, name, cycle) — 알림용
         for t in trades:
-            db.add(TradeLog(
-                ticker_id=_uuid.UUID(t["ticker_id"]) if t["ticker_id"] else None,
+            ticker_id_val = _uuid.UUID(t["ticker_id"]) if t["ticker_id"] else None
+            action = t["action"]
+
+            # InvestmentCycle 처리
+            cycle_id = None
+            if ticker_id_val:
+                cycle_id = _handle_investment_cycle(
+                    db, ticker_id_val, t["symbol"], t["name"], action,
+                    t.get("avg_price_before", 0), t.get("avg_price_after", 0),
+                    sell_cycles,
+                )
+
+            log = TradeLog(
+                ticker_id=ticker_id_val,
                 symbol=t["symbol"],
                 name=t["name"],
-                action=t["action"],
+                action=action,
                 quantity_before=t["quantity_before"],
                 quantity_after=t["quantity_after"],
                 avg_price_before=t["avg_price_before"],
                 avg_price_after=t["avg_price_after"],
-            ))
-            logger.info("거래 감지: %s %s %.2f→%.2f", t["symbol"], t["action"].value, t["quantity_before"], t["quantity_after"])
+                cycle_id=cycle_id,
+            )
+            db.add(log)
+            logger.info("거래 감지: %s %s %.2f→%.2f", t["symbol"], action.value, t["quantity_before"], t["quantity_after"])
 
         db.commit()
+
+        # 청산 사이클 알림 (commit 후)
+        for symbol, name, cycle in sell_cycles:
+            try:
+                from services.telegram import notify_cycle_closed
+                notify_cycle_closed(symbol, name, cycle.pnl_pct, str(cycle.id))
+            except Exception:
+                pass
         logger.info("포트폴리오 동기화 완료: %d종목", synced)
     finally:
         db.close()
 
     return {"synced": synced, "accounts": len(accounts), "errors": errors, "trades": trades}
+
+
+def _handle_investment_cycle(
+    db, ticker_id, symbol: str, name: str, action,
+    avg_price_before: float, avg_price_after: float,
+    sell_cycles: list,
+) -> _uuid.UUID | None:
+    """거래 감지 시 InvestmentCycle을 생성하거나 종료. 사이클 ID 반환."""
+    try:
+        now = datetime.utcnow()
+
+        if action in (TradeActionEnum.BUY, TradeActionEnum.ADD):
+            # 이미 열린 사이클이 있으면 기존 것 재사용
+            open_cycle = (
+                db.query(InvestmentCycle)
+                .filter(InvestmentCycle.ticker_id == ticker_id, InvestmentCycle.status == CycleStatusEnum.OPEN)
+                .first()
+            )
+            if open_cycle:
+                return open_cycle.id
+
+            # 새 사이클 열기 — 현재 confirmed thesis 연결
+            thesis = (
+                db.query(Thesis)
+                .filter(Thesis.ticker_id == ticker_id, Thesis.confirmed == 'confirmed')
+                .order_by(Thesis.version_number.desc())
+                .first()
+            )
+            cycle = InvestmentCycle(
+                ticker_id=ticker_id,
+                thesis_id=thesis.id if thesis else None,
+                status=CycleStatusEnum.OPEN,
+                opened_at=now,
+            )
+            db.add(cycle)
+            db.flush()
+            logger.info("InvestmentCycle 시작: %s (cycle_id=%s)", symbol, cycle.id)
+            return cycle.id
+
+        elif action in (TradeActionEnum.SELL,):
+            # 전량 매도 → 사이클 종료
+            open_cycle = (
+                db.query(InvestmentCycle)
+                .filter(InvestmentCycle.ticker_id == ticker_id, InvestmentCycle.status == CycleStatusEnum.OPEN)
+                .first()
+            )
+            if not open_cycle:
+                return None
+
+            # pnl_pct 계산 (avg_price_before = cost basis, 현재가로 추정)
+            pnl_pct = None
+            if avg_price_before > 0:
+                # Portfolio의 current_price가 있으면 사용
+                from models.db import Portfolio
+                portfolio = db.query(Portfolio).filter(Portfolio.ticker_id == ticker_id).first()
+                sell_price = portfolio.current_price if portfolio and portfolio.current_price else avg_price_before
+                pnl_pct = (sell_price - avg_price_before) / avg_price_before * 100
+
+            open_cycle.status = CycleStatusEnum.CLOSED
+            open_cycle.closed_at = now
+            open_cycle.pnl_pct = round(pnl_pct, 2) if pnl_pct is not None else None
+            db.flush()
+
+            # Retrospective 초안 자동 생성
+            original_logic = ""
+            if open_cycle.thesis:
+                original_logic = (
+                    getattr(open_cycle.thesis, 'monitoring_contract', '') or
+                    getattr(open_cycle.thesis, 'key_logic', '') or
+                    ""
+                )
+            if original_logic:
+                retro = Retrospective(
+                    cycle_id=open_cycle.id,
+                    is_draft=True,
+                    original_logic=original_logic,
+                )
+                db.add(retro)
+                db.flush()
+
+            sell_cycles.append((symbol, name, open_cycle))
+            logger.info("InvestmentCycle 종료: %s pnl=%.1f%%", symbol, pnl_pct or 0)
+            return open_cycle.id
+
+        elif action == TradeActionEnum.REDUCE:
+            # 일부 매도 — 사이클 유지, 현재 open_cycle ID만 반환
+            open_cycle = (
+                db.query(InvestmentCycle)
+                .filter(InvestmentCycle.ticker_id == ticker_id, InvestmentCycle.status == CycleStatusEnum.OPEN)
+                .first()
+            )
+            return open_cycle.id if open_cycle else None
+
+    except Exception:
+        logger.exception("InvestmentCycle 처리 실패: %s", symbol)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None

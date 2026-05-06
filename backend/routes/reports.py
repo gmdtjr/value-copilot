@@ -263,6 +263,9 @@ def _build_portfolio_prompt(db) -> str:
                 thesis_section = f"\n  - 유형: {st} | 상태: {status}"
                 if t.thesis.key_logic:
                     thesis_section += f"\n  - 핵심 논리: {t.thesis.key_logic[:200].strip()}"
+                monitoring_contract = getattr(t.thesis, 'monitoring_contract', None)
+                if monitoring_contract:
+                    thesis_section += f"\n  - 감시 계약: {monitoring_contract[:300].strip()}"
                 elif t.thesis.key_assumptions:
                     thesis_section += f"\n  - 핵심가정: {t.thesis.key_assumptions[:150].strip()}"
                 if t.thesis.risk:

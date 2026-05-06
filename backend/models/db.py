@@ -141,6 +141,7 @@ class Thesis(Base):
     # Phase 2 신규 필드
     exploration_note = Column(Text, nullable=True)   # 외부 탐색에서 건진 핵심 인사이트
     key_logic = Column(Text, nullable=True)           # "이 논리가 깨지면 thesis가 무너진다" 한 단락
+    monitoring_contract = Column(Text, nullable=True) # confirmed 후 Break Monitor가 감시할 계약서
     retired_at = Column(DateTime, nullable=True)
     retirement_reason = Column(String(50), nullable=True)  # broken|sold|superseded|manual
 
@@ -241,6 +242,7 @@ class TradeLog(Base):
     note = Column(Text, nullable=True)
     detected_at = Column(DateTime, default=datetime.utcnow)
     noted_at = Column(DateTime, nullable=True)
+    cycle_id = Column(UUID(as_uuid=True), ForeignKey("investment_cycles.id", ondelete="SET NULL"), nullable=True)
 
 
 class IdeaMemo(Base):
@@ -252,6 +254,86 @@ class IdeaMemo(Base):
     ticker_symbol = Column(String(20), nullable=True)  # DB 종목과 무관한 자유 태그
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CycleStatusEnum(str, enum.Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class ExitReasonEnum(str, enum.Enum):
+    LOGIC_BROKEN = "logic_broken"
+    TARGET_REACHED = "target_reached"
+    BETTER_OPPORTUNITY = "better_opportunity"
+    MISTAKE = "mistake"
+    OTHER = "other"
+
+
+class InvestmentCycle(Base):
+    """매수~매도 완결 단위. KIS 동기화 시 자동 생성·종료."""
+    __tablename__ = "investment_cycles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id", ondelete="CASCADE"), nullable=False)
+    thesis_id = Column(UUID(as_uuid=True), ForeignKey("theses.id", ondelete="SET NULL"), nullable=True)
+    status = Column(_string_enum(CycleStatusEnum, name="cyclestatusenum"), default=CycleStatusEnum.OPEN, nullable=False)
+    opened_at = Column(DateTime, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+    exit_reason = Column(_string_enum(ExitReasonEnum, name="exitreasonenum"), nullable=True)
+    exit_reason_note = Column(Text, nullable=True)
+    pnl_pct = Column(Float, nullable=True)
+
+    ticker = relationship("Ticker")
+    thesis = relationship("Thesis")
+    retrospective = relationship("Retrospective", back_populates="cycle", uselist=False)
+
+
+class Retrospective(Base):
+    """청산 후 논리 복기. LLM이 초안 생성, 사람이 수정·확정."""
+    __tablename__ = "retrospectives"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cycle_id = Column(UUID(as_uuid=True), ForeignKey("investment_cycles.id", ondelete="CASCADE"), unique=True, nullable=False)
+    is_draft = Column(Boolean, default=True, nullable=False)
+
+    original_logic = Column(Text, nullable=False)   # key_logic 자동 복사 (불변)
+    what_changed = Column(Text, nullable=True)        # 실제로 무엇이 바뀌었는가
+    logic_held = Column(Boolean, nullable=True)       # 핵심 논리가 결국 맞았는가
+    weak_link = Column(Text, nullable=True)           # 논리의 어느 연결고리가 약했는가
+    if_wrong_why = Column(Text, nullable=True)        # 틀렸다면 어디서 잘못 생각했는가
+    if_right_why = Column(Text, nullable=True)        # 맞았다면 이 논리 구조는 반복 가능한가
+    next_time = Column(Text, nullable=True)           # 다음에 비슷한 상황에서 어떻게 생각할 것인가
+
+    completed_at = Column(DateTime, nullable=True)
+
+    cycle = relationship("InvestmentCycle", back_populates="retrospective")
+
+
+class VerdictEnum(str, enum.Enum):
+    STRENGTHENING = "strengthening"
+    INTACT = "intact"
+    WEAKENING = "weakening"
+    BROKEN = "broken"
+
+
+class BreakSignal(Base):
+    """Break Monitor 실행 결과. LLM은 관찰만 기록, 사람이 verdict 판정."""
+    __tablename__ = "break_signals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    thesis_id = Column(UUID(as_uuid=True), ForeignKey("theses.id", ondelete="CASCADE"), nullable=False)
+    checked_at = Column(DateTime, default=datetime.utcnow)
+    key_logic_snapshot = Column(Text, nullable=True)   # 체크 시점의 key_logic
+    observations = Column(Text, nullable=False)         # LLM 관찰: "무엇이 바뀌었는가"
+    positive_signals = Column(Text, nullable=True)      # thesis 강화/추가 검토 신호
+    negative_signals = Column(Text, nullable=True)      # thesis 약화/파기 신호
+    watch_items = Column(Text, nullable=True)           # 다음 확인 때 주목할 항목
+    # 사람 판정
+    verdict = Column(_string_enum(VerdictEnum, name="verdictenum"), nullable=True)
+    human_note = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+
+    thesis = relationship("Thesis")
 
 
 class ConversationImportTypeEnum(str, enum.Enum):

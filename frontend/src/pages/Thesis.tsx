@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Sparkles, CheckCircle, AlertTriangle,
   ChevronDown, ChevronUp, Loader2, FileText, Bell, MessageSquare, RefreshCw,
-  Database, BarChart2, ExternalLink, Trash2, Link, GitBranch, Key,
+  Database, BarChart2, ExternalLink, Trash2, Link, GitBranch,
   Globe, Clock, Copy, Check, X, Search,
 } from 'lucide-react'
 import { api } from '../api'
@@ -11,7 +11,7 @@ import { fmtKST } from '../utils/date'
 import { Markdown } from '../components/Markdown'
 import { ThemeControls } from '../components/ThemeControls'
 import { useTheme } from '../contexts/ThemeContext'
-import type { Thesis, Ticker, FinancialData, SecSummary, ConversationImport } from '../types'
+import type { Thesis, Ticker, FinancialData, SecSummary, ConversationImport, BreakSignal, VerdictType, InvestmentCycle } from '../types'
 
 
 type DataStatus = {
@@ -151,12 +151,14 @@ function TickerPromptButton({
   label,
   title,
   className,
+  signalId,
 }: {
   tickerId: string
   promptType: string
   label: ReactNode
   title: string
   className: string
+  signalId?: string
 }) {
   const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle')
   const [promptText, setPromptText] = useState<string | null>(null)
@@ -166,7 +168,9 @@ function TickerPromptButton({
     setState('loading')
     setPromptText(null)
     try {
-      const res = await fetch(`/api/tickers/${tickerId}/explore-prompt?type=${promptType}`)
+      const params = new URLSearchParams({ type: promptType })
+      if (signalId) params.set('signal_id', signalId)
+      const res = await fetch(`/api/tickers/${tickerId}/explore-prompt?${params.toString()}`)
       if (!res.ok) { setState('error'); setTimeout(() => setState('idle'), 3000); return }
       const { prompt } = await res.json()
 
@@ -209,6 +213,247 @@ function TickerPromptButton({
         />
       )}
     </>
+  )
+}
+
+// ── BreakSignalSection ────────────────────────────────────────────────────────
+
+const VERDICT_OPTIONS: { value: VerdictType; label: string; color: string; bg: string }[] = [
+  { value: 'strengthening', label: '강화', color: 'text-blue-700 dark:text-blue-300', bg: 'bg-blue-100 dark:bg-blue-900/40 border-blue-300 dark:border-blue-700' },
+  { value: 'intact',    label: '✅ Intact',    color: 'text-emerald-700 dark:text-emerald-300', bg: 'bg-emerald-100 dark:bg-emerald-900/40 border-emerald-300 dark:border-emerald-700' },
+  { value: 'weakening', label: '⚠️ Weakening', color: 'text-amber-700 dark:text-amber-300',   bg: 'bg-amber-100 dark:bg-amber-900/40 border-amber-300 dark:border-amber-700' },
+  { value: 'broken',    label: '🚨 Broken',    color: 'text-red-700 dark:text-red-300',       bg: 'bg-red-100 dark:bg-red-900/40 border-red-300 dark:border-red-700' },
+]
+
+function VerdictBadge({ verdict }: { verdict: VerdictType }) {
+  const opt = VERDICT_OPTIONS.find(o => o.value === verdict)
+  if (!opt) return null
+  return (
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded border ${opt.bg} ${opt.color}`}>
+      {opt.label}
+    </span>
+  )
+}
+
+function BreakSignalCard({
+  signal,
+  onVerdictSet,
+  onCreateRevision,
+}: {
+  signal: BreakSignal
+  onVerdictSet: (id: string, verdict: VerdictType, note: string) => Promise<void>
+  onCreateRevision: (signal: BreakSignal) => Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(!signal.verdict)
+  const [selectedVerdict, setSelectedVerdict] = useState<VerdictType | null>(signal.verdict)
+  const [note, setNote] = useState(signal.human_note ?? '')
+  const [saving, setSaving] = useState(false)
+  const [creatingRevision, setCreatingRevision] = useState(false)
+
+  const isPending = !signal.verdict
+  const { fmtKST } = { fmtKST: (s: string) => new Date(s.endsWith('Z') ? s : s + 'Z').toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }
+
+  async function submit() {
+    if (!selectedVerdict) return
+    setSaving(true)
+    try {
+      await onVerdictSet(signal.id, selectedVerdict, note)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function createRevision() {
+    setCreatingRevision(true)
+    try {
+      await onCreateRevision(signal)
+    } finally {
+      setCreatingRevision(false)
+    }
+  }
+
+  return (
+    <div className={`border rounded-xl overflow-hidden ${isPending ? 'border-amber-400 dark:border-amber-600' : 'border-gray-200 dark:border-gray-800'}`}>
+      {/* 헤더 */}
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className={`w-full flex items-center gap-2 px-4 py-3 text-left ${isPending ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-gray-50 dark:bg-gray-900'}`}
+      >
+        {isPending && <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 flex-shrink-0">판정 필요</span>}
+        {signal.verdict && <VerdictBadge verdict={signal.verdict} />}
+        <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto flex-shrink-0">
+          {new Date(signal.checked_at.endsWith('Z') ? signal.checked_at : signal.checked_at + 'Z')
+            .toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+        </span>
+        {expanded ? <ChevronUp size={13} className="text-gray-400 flex-shrink-0" /> : <ChevronDown size={13} className="text-gray-400 flex-shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="px-4 py-4 space-y-4 bg-white dark:bg-gray-950">
+          {/* 관찰 내용 */}
+          <div>
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 flex items-center gap-1">
+              <Bell size={11} /> 오늘의 관찰
+            </p>
+            <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">
+              {signal.observations}
+            </p>
+          </div>
+
+          {signal.positive_signals && signal.positive_signals !== '특이사항 없음' && (
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2">
+              <p className="text-xs font-medium text-blue-700 dark:text-blue-300 mb-1.5">Thesis 강화 신호</p>
+              <p className="text-sm text-blue-800 dark:text-blue-200 leading-relaxed whitespace-pre-wrap">{signal.positive_signals}</p>
+            </div>
+          )}
+
+          {signal.negative_signals && signal.negative_signals !== '특이사항 없음' && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
+              <p className="text-xs font-medium text-red-700 dark:text-red-300 mb-1.5">Thesis 약화 신호</p>
+              <p className="text-sm text-red-800 dark:text-red-200 leading-relaxed whitespace-pre-wrap">{signal.negative_signals}</p>
+            </div>
+          )}
+
+          {/* 주목 항목 */}
+          {signal.watch_items && (
+            <div>
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">다음 확인 항목</p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">{signal.watch_items}</p>
+            </div>
+          )}
+
+          {/* 감시 기준 스냅샷 */}
+          {signal.key_logic_snapshot && (
+            <div className="border-l-2 border-violet-400 pl-3">
+              <p className="text-xs font-medium text-violet-500 dark:text-violet-400 mb-1 flex items-center gap-1"><Bell size={11} /> 모니터링 기준 (체크 시점)</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">{signal.key_logic_snapshot}</p>
+            </div>
+          )}
+
+          {/* Verdict 입력 */}
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-800 space-y-3">
+            <p className="text-xs font-medium text-gray-600 dark:text-gray-300">사람 판정</p>
+            <div className="flex gap-2 flex-wrap">
+              {VERDICT_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSelectedVerdict(opt.value)}
+                  className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                    selectedVerdict === opt.value
+                      ? opt.bg + ' ' + opt.color
+                      : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder="판정 이유 (선택) — 왜 이 판단을 내렸는가..."
+              rows={2}
+              className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-500"
+            />
+            <div className="flex justify-end">
+              <button
+                onClick={submit}
+                disabled={saving || !selectedVerdict}
+                className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors"
+              >
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                판정 저장
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-gray-100 dark:border-gray-800 flex flex-wrap gap-2 justify-end">
+            {signal.ticker_id && (
+              <TickerPromptButton
+                tickerId={signal.ticker_id}
+                signalId={signal.id}
+                promptType="thesis_revision"
+                label={<><Globe size={12} /> 외부 재검토 프롬프트</>}
+                title={`${signal.ticker_name ?? signal.ticker_symbol ?? ''} Thesis 재검토 프롬프트`}
+                className="bg-blue-900/20 border-blue-700/50 text-blue-600 dark:text-blue-300 hover:bg-blue-900/40"
+              />
+            )}
+            <button
+              onClick={createRevision}
+              disabled={creatingRevision}
+              className="flex items-center gap-1.5 bg-gray-200 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 text-gray-800 dark:text-gray-200 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 transition-colors"
+            >
+              {creatingRevision ? <Loader2 size={12} className="animate-spin" /> : <GitBranch size={12} />}
+              새 버전 반영
+            </button>
+          </div>
+
+          {/* 이미 판정된 경우 메모 표시 */}
+          {signal.verdict && signal.human_note && !isPending && (
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg px-3 py-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">내 판정 메모: {signal.human_note}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BreakSignalSection({
+  signals,
+  loaded,
+  onRefresh,
+  onVerdictSet,
+  onCreateRevision,
+}: {
+  signals: BreakSignal[]
+  loaded: boolean
+  onRefresh: () => void
+  onVerdictSet: (id: string, verdict: VerdictType, note: string) => Promise<void>
+  onCreateRevision: (signal: BreakSignal) => Promise<void>
+}) {
+  const pending = signals.filter(s => !s.verdict)
+  const [showAll, setShowAll] = useState(false)
+  const displayed = showAll ? signals : signals.slice(0, 3)
+
+  return (
+    <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <Bell size={14} className={pending.length > 0 ? 'text-amber-500' : 'text-gray-400 dark:text-gray-500'} />
+        <span className="text-sm font-medium text-gray-900 dark:text-white">Break Monitor</span>
+        {!loaded
+          ? <Loader2 size={12} className="animate-spin text-gray-400" />
+          : pending.length > 0
+          ? <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300 px-1.5 py-0 rounded-full leading-5 font-medium">{pending.length} 판정 필요</span>
+          : signals.length > 0
+          ? <span className="text-xs text-gray-400 dark:text-gray-600">최근 {signals.length}건</span>
+          : <span className="text-xs text-gray-400 dark:text-gray-600">기록 없음</span>
+        }
+        <button onClick={onRefresh} className="ml-auto text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" title="새로고침">
+          <RefreshCw size={11} />
+        </button>
+      </div>
+
+      {loaded && signals.length === 0 && (
+        <p className="text-xs text-gray-400 dark:text-gray-600">
+          Break Monitor 실행 시 관찰 결과가 여기에 기록됩니다.
+        </p>
+      )}
+
+      {displayed.map(s => (
+        <BreakSignalCard key={s.id} signal={s} onVerdictSet={onVerdictSet} onCreateRevision={onCreateRevision} />
+      ))}
+
+      {signals.length > 3 && (
+        <button
+          onClick={() => setShowAll(v => !v)}
+          className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 w-full text-center"
+        >
+          {showAll ? '▲ 접기' : `▼ 전체 보기 (${signals.length}건)`}
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -338,26 +583,23 @@ function TickerConvImports({
   )
 }
 
-// ── KeyLogicCard ──────────────────────────────────────────────────────────────
-
-function KeyLogicCard({
+function MonitoringContractCard({
   thesis,
   onSave,
 }: {
   thesis: Thesis | null
-  onSave: (kl: string) => Promise<void>
+  onSave: (contract: string) => Promise<void>
 }) {
   const [editing, setEditing] = useState(false)
-  const [text, setText] = useState(thesis?.key_logic ?? '')
+  const [text, setText] = useState(thesis?.monitoring_contract ?? '')
   const [saving, setSaving] = useState(false)
 
-  // 상위 thesis가 바뀌면 text 동기화
   useEffect(() => {
-    if (!editing) setText(thesis?.key_logic ?? '')
-  }, [thesis?.key_logic, editing])
+    if (!editing) setText(thesis?.monitoring_contract ?? '')
+  }, [thesis?.monitoring_contract, editing])
 
   const isConfirmed = thesis?.confirmed === 'confirmed'
-  const hasKeyLogic = !!(thesis?.key_logic?.trim())
+  const hasContract = !!(thesis?.monitoring_contract?.trim())
 
   async function save() {
     if (!text.trim()) return
@@ -372,21 +614,22 @@ function KeyLogicCard({
 
   return (
     <div className={`border rounded-xl p-4 space-y-2 ${
-      hasKeyLogic
+      hasContract
         ? 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800'
         : 'bg-amber-900/10 border-amber-700/50'
     }`}>
       <div className="flex items-center gap-2">
-        <Key size={14} className={hasKeyLogic ? 'text-violet-400' : 'text-amber-500'} />
-        <span className="text-sm font-medium text-gray-900 dark:text-white">핵심 논리 (Key Logic)</span>
-        {!hasKeyLogic && (
+        <Bell size={14} className={hasContract ? 'text-emerald-500' : 'text-amber-500'} />
+        <span className="text-sm font-medium text-gray-900 dark:text-white">Monitoring Contract</span>
+        <span className="text-xs text-gray-400 dark:text-gray-500">Break Monitor 기준</span>
+        {!hasContract && (
           <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
             Confirm 전 필수
           </span>
         )}
-        {hasKeyLogic && !isConfirmed && !editing && (
+        {hasContract && !isConfirmed && !editing && (
           <button
-            onClick={() => { setText(thesis?.key_logic ?? ''); setEditing(true) }}
+            onClick={() => { setText(thesis?.monitoring_contract ?? ''); setEditing(true) }}
             className="ml-auto text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
           >
             수정
@@ -394,16 +637,16 @@ function KeyLogicCard({
         )}
       </div>
 
-      {!editing && hasKeyLogic ? (
-        <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap border-l-2 border-violet-400 pl-3">
-          {thesis!.key_logic}
-        </p>
+      {!editing && hasContract ? (
+        <div className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap border-l-2 border-emerald-500 pl-3">
+          {thesis!.monitoring_contract}
+        </div>
       ) : !editing ? (
         <button
           onClick={() => { setText(''); setEditing(true) }}
-          className="text-sm text-amber-600 dark:text-amber-400 hover:text-amber-500 transition-colors"
+          className="text-sm text-amber-600 dark:text-amber-400 hover:text-amber-500 transition-colors text-left"
         >
-          "이 논리가 깨지면 thesis가 무너진다"는 한 단락을 직접 작성하거나 AI 분석 후 자동 생성됩니다. 클릭하여 입력.
+          외부 Claude에서 뽑은 Core Logic / Break Conditions / Watch Metrics를 붙여넣으세요.
         </button>
       ) : null}
 
@@ -413,24 +656,24 @@ function KeyLogicCard({
             value={text}
             onChange={e => setText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save() }}
-            placeholder='예: "NVDA의 AI 학습 수요가 연간 30%+ 성장을 유지하는 것이 핵심 전제다. 만약 주요 CSP가 자체 칩으로 전환한다면 thesis를 즉시 재검토해야 한다."'
-            rows={4}
+            placeholder={'## Core Logic\n...\n\n## Break Conditions\n- ...\n\n## Strengthening Signals\n- ...\n\n## Watch Metrics\n- ...'}
+            rows={8}
             autoFocus
             disabled={saving}
-            className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600 disabled:opacity-50"
+            className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-400 dark:border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-emerald-600 disabled:opacity-50"
           />
-          <p className="text-xs text-gray-400 dark:text-gray-500">⌘Enter 저장 · 150~250자 권장</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">⌘Enter 저장 · Break Monitor는 이 계약서를 기준으로 관찰합니다.</p>
           <div className="flex gap-2">
             <button
               onClick={save}
               disabled={saving || !text.trim()}
-              className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg transition-colors"
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
               저장
             </button>
             <button
-              onClick={() => { setEditing(false); setText(thesis?.key_logic ?? '') }}
+              onClick={() => { setEditing(false); setText(thesis?.monitoring_contract ?? '') }}
               className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             >
               취소
@@ -813,10 +1056,11 @@ export default function ThesisPage() {
   const [modalStockType, setModalStockType] = useState('compounding')
   const [modalSeedMemo, setModalSeedMemo] = useState('')
   const [modalExplorationNote, setModalExplorationNote] = useState('')
+  const [modalMonitoringContract, setModalMonitoringContract] = useState('')
 
-  // key_logic confirm flow
+  // Monitoring Contract confirm flow
   const [showConfirmModal, setShowConfirmModal] = useState(false)
-  const [confirmKeyLogic, setConfirmKeyLogic] = useState('')
+  const [confirmMonitoringContract, setConfirmMonitoringContract] = useState('')
 
   // version history
   const [versions, setVersions] = useState<Thesis[]>([])
@@ -826,6 +1070,13 @@ export default function ThesisPage() {
   // 종목별 탐색 기록
   const [convImports, setConvImports] = useState<ConversationImport[]>([])
   const [convLoaded, setConvLoaded] = useState(false)
+
+  // Break Signals
+  const [breakSignals, setBreakSignals] = useState<BreakSignal[]>([])
+  const [breakSignalsLoaded, setBreakSignalsLoaded] = useState(false)
+
+  // Open cycle
+  const [openCycle, setOpenCycle] = useState<InvestmentCycle | null>(null)
   const [openSections, setOpenSections] = useState<Set<ThesisSectionKey>>(new Set(['thesis']))
   const [reporting, setReporting] = useState(false)
   const [reportMsg, setReportMsg] = useState('')
@@ -862,8 +1113,15 @@ export default function ThesisPage() {
         setThesis(th)
         setDataStatus(ds)
         setValleyUrl(t?.valley_url ?? null)
-        // 탐색 기록은 백그라운드에서 로드
-        if (id) loadConvImports(id)
+        // 탐색 기록 + Break Signals + Open Cycle 백그라운드 로드
+        if (id) {
+          loadConvImports(id)
+          loadBreakSignals(id)
+          fetch(`/api/cycles?ticker_id=${id}&status=open&limit=1`)
+            .then(r => r.ok ? r.json() : [])
+            .then((list: InvestmentCycle[]) => setOpenCycle(list[0] ?? null))
+            .catch(() => null)
+        }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
@@ -906,6 +1164,7 @@ export default function ThesisPage() {
     setModalStockType(thesis?.stock_type ?? 'compounding')
     setModalSeedMemo('')
     setModalExplorationNote('')
+    setModalMonitoringContract('')
     setShowAnalyzeModal(true)
   }
 
@@ -919,7 +1178,12 @@ export default function ThesisPage() {
 
     abortRef.current = api.analyzeStream(
       id,
-      { stock_type: modalStockType, seed_memo: modalSeedMemo, exploration_note: modalExplorationNote || undefined },
+      {
+        stock_type: modalStockType,
+        seed_memo: modalSeedMemo,
+        exploration_note: modalExplorationNote || undefined,
+        monitoring_contract: modalMonitoringContract || undefined,
+      },
       {
         onStart: () => setStreamText(''),
         onChunk: (text) => setStreamText((prev) => prev + text),
@@ -1051,24 +1315,44 @@ export default function ThesisPage() {
 
   function openConfirmModal() {
     if (!id) return
-    setConfirmKeyLogic(thesis?.key_logic ?? '')
+    setConfirmMonitoringContract(thesis?.monitoring_contract ?? '')
     setShowConfirmModal(true)
   }
 
   async function handleConfirm() {
     if (!id) return
-    if (!thesis?.key_logic && !confirmKeyLogic.trim()) {
-      // key_logic이 없으면 모달 열기
+    if (!thesis?.monitoring_contract && !confirmMonitoringContract.trim()) {
       openConfirmModal()
       return
     }
     try {
-      const updated = await api.confirmThesis(id, confirmKeyLogic.trim() || undefined)
+      const updated = await api.confirmThesis(
+        id,
+        confirmMonitoringContract.trim() || undefined,
+      )
       setThesis(updated)
       setShowConfirmModal(false)
       setVersionsLoaded(false) // version history 캐시 무효화
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : '오류 발생')
+    }
+  }
+
+  async function handleDeleteThesisVersion(thesisId: string) {
+    const msg = thesis?.confirmed === 'confirmed'
+      ? '이 confirmed thesis 버전을 삭제할까요? 다른 버전이 없으면 삭제 불가합니다.'
+      : 'Thesis 초안을 삭제할까요? 이 작업은 되돌릴 수 없습니다.'
+    if (!confirm(msg)) return
+    const res = await fetch(`/api/thesis/versions/${thesisId}`, { method: 'DELETE' })
+    if (res.ok || res.status === 204) {
+      // 삭제 후 최신 활성 thesis 다시 로드 (없으면 null)
+      if (!id) return
+      const updated = await api.getThesis(id).catch(() => null)
+      setThesis(updated)
+      setVersionsLoaded(false)
+    } else {
+      const err = await res.json().catch(() => ({ detail: '삭제 실패' }))
+      alert(err.detail || '삭제 실패')
     }
   }
 
@@ -1080,6 +1364,59 @@ export default function ThesisPage() {
       setVersionsLoaded(false)
     } catch (e: unknown) {
       alert(e instanceof Error ? e.message : '오류 발생')
+    }
+  }
+
+  function buildSignalFeedback(signal: BreakSignal) {
+    const parts = [
+      '아래 Break Monitor 관찰 결과를 반영해서 thesis/risk/key_assumptions/Monitoring Contract를 보완해줘.',
+      '',
+      '## Observations',
+      signal.observations,
+    ]
+    if (signal.positive_signals) parts.push('', '## Thesis 강화 신호', signal.positive_signals)
+    if (signal.negative_signals) parts.push('', '## Thesis 약화 신호', signal.negative_signals)
+    if (signal.watch_items) parts.push('', '## 다음 확인 항목', signal.watch_items)
+    if (signal.verdict) parts.push('', '## 사람 판정', signal.verdict)
+    if (signal.human_note) parts.push('', '## 사람 메모', signal.human_note)
+    parts.push(
+      '',
+      '요청:',
+      '- 기존 thesis가 유지되는 부분과 수정해야 하는 부분을 구분해줘.',
+      '- Strengthening Signals와 Break Conditions를 Monitoring Contract에 반영해줘.',
+      '- 매수/매도 지시는 하지 말고, 사람이 확인할 추가 질문을 남겨줘.',
+    )
+    return parts.join('\n')
+  }
+
+  async function handleCreateVersionFromSignal(signal: BreakSignal) {
+    try {
+      const res = await fetch(`/api/break-signals/${signal.id}/thesis-version`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: '새 버전 생성 실패' }))
+        throw new Error(err.detail || '새 버전 생성 실패')
+      }
+      const newVersion: Thesis = await res.json()
+      setThesis(newVersion)
+      setFeedback(buildSignalFeedback(signal))
+      setRefineError('')
+      setRefineState('idle')
+      setVersionsLoaded(false)
+      setActiveTab('thesis')
+      setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
+      setReportMsg('Break Monitor 신호를 반영할 새 draft 버전을 만들었습니다. 피드백을 확인한 뒤 반영하세요.')
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '새 버전 생성 실패')
+    }
+  }
+
+  async function loadBreakSignals(tickerId: string) {
+    setBreakSignalsLoaded(false)
+    try {
+      const res = await fetch(`/api/break-signals?ticker_id=${tickerId}`)
+      if (res.ok) setBreakSignals(await res.json())
+    } catch { /* ignore */ } finally {
+      setBreakSignalsLoaded(true)
     }
   }
 
@@ -1224,17 +1561,27 @@ export default function ThesisPage() {
               </button>
             )}
             {(thesis?.confirmed === 'draft' || thesis?.confirmed === 'needs_review') && hasContent && (
-              <button
-                onClick={handleConfirm}
-                className={`flex items-center gap-1.5 text-gray-900 dark:text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors ${
-                  thesis.confirmed === 'needs_review'
-                    ? 'bg-orange-700 hover:bg-orange-600'
-                    : 'bg-emerald-700 hover:bg-emerald-600'
-                }`}
-              >
-                <CheckCircle size={14} />
-                {thesis.confirmed === 'needs_review' ? '재확인' : 'Confirm'}
-              </button>
+              <>
+                <button
+                  onClick={() => handleDeleteThesisVersion(thesis.id)}
+                  title="이 thesis 초안 삭제"
+                  className="flex items-center gap-1 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 text-xs px-1.5 py-1.5 rounded-lg transition-colors"
+                >
+                  <Trash2 size={13} />
+                  <span className="hidden sm:inline text-xs">초기화</span>
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  className={`flex items-center gap-1.5 text-gray-900 dark:text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors ${
+                    thesis.confirmed === 'needs_review'
+                      ? 'bg-orange-700 hover:bg-orange-600'
+                      : 'bg-emerald-700 hover:bg-emerald-600'
+                  }`}
+                >
+                  <CheckCircle size={14} />
+                  {thesis.confirmed === 'needs_review' ? '재확인' : 'Confirm'}
+                </button>
+              </>
             )}
             {thesis?.confirmed === 'confirmed' && (
               <button
@@ -1352,6 +1699,23 @@ export default function ThesisPage() {
               </div>
             )}
 
+            {/* 진행 중 사이클 배너 */}
+            {openCycle && (
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2.5 flex items-center gap-3 text-sm">
+                <span className="text-blue-600 dark:text-blue-400 font-medium flex-shrink-0">📈 사이클 진행 중</span>
+                <span className="text-blue-700 dark:text-blue-300 text-xs">
+                  {fmtKST(openCycle.opened_at, 'date')} 시작
+                  {' · '}
+                  {Math.floor((Date.now() - new Date(openCycle.opened_at.endsWith('Z') ? openCycle.opened_at : openCycle.opened_at + 'Z').getTime()) / 86400000)}일째 보유
+                  {openCycle.pnl_pct != null && (
+                    <span className={openCycle.pnl_pct >= 0 ? ' text-emerald-600 dark:text-emerald-400' : ' text-red-600 dark:text-red-400'}>
+                      {' · '}{openCycle.pnl_pct >= 0 ? '+' : ''}{openCycle.pnl_pct.toFixed(1)}%
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+
             {/* Report / error messages */}
             {reportMsg && (
               <div className="bg-blue-900/30 border border-blue-800 rounded-lg p-4 text-blue-700 dark:text-blue-300 text-sm flex items-center gap-2">
@@ -1400,6 +1764,13 @@ export default function ThesisPage() {
                     label={<><AlertTriangle size={12} /> 반대 논거 탐색 프롬프트</>}
                     title={`${ticker?.name ?? ''} 반대 논거 탐색 프롬프트`}
                     className="bg-red-900/20 border-red-700/50 text-red-600 dark:text-red-300 hover:bg-red-900/40"
+                  />
+                  <TickerPromptButton
+                    tickerId={id}
+                    promptType="monitoring_contract"
+                    label={<><Bell size={12} /> Seed Memo + 감시 계약서</>}
+                    title={`${ticker?.name ?? ''} Seed Memo + Monitoring Contract 프롬프트`}
+                    className="bg-emerald-900/20 border-emerald-700/50 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-900/40"
                   />
                 </div>
                 {!hasContent && (
@@ -1473,13 +1844,13 @@ export default function ThesisPage() {
               )
             })}
 
-            {/* key_logic 섹션 */}
+            {/* Monitoring Contract */}
             {hasContent && (
-              <KeyLogicCard
+              <MonitoringContractCard
                 thesis={thesis}
-                onSave={async (kl) => {
+                onSave={async (contract) => {
                   if (!id) return
-                  const updated = await api.patchThesis(id, { key_logic: kl })
+                  const updated = await api.patchThesis(id, { monitoring_contract: contract })
                   setThesis(updated)
                 }}
               />
@@ -1538,6 +1909,27 @@ export default function ThesisPage() {
               <p className="text-xs text-gray-500 dark:text-gray-600 text-right">
                 마지막 분석: {fmtKST(thesis.last_analyzed_at)}
               </p>
+            )}
+
+            {/* Break Signal 섹션 — confirmed thesis에서만 표시 */}
+            {thesis?.confirmed === 'confirmed' && id && (
+              <BreakSignalSection
+                signals={breakSignals}
+                loaded={breakSignalsLoaded}
+                onRefresh={() => loadBreakSignals(id)}
+                onCreateRevision={handleCreateVersionFromSignal}
+                onVerdictSet={async (signalId, verdict, note) => {
+                  const res = await fetch(`/api/break-signals/${signalId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ verdict, human_note: note || null }),
+                  })
+                  if (res.ok) {
+                    const updated: BreakSignal = await res.json()
+                    setBreakSignals(prev => prev.map(s => s.id === signalId ? updated : s))
+                  }
+                }}
+              />
             )}
           </>
         )}
@@ -1605,18 +1997,30 @@ export default function ThesisPage() {
                       {v.confirmed_at ? fmtKST(v.confirmed_at) : (v.last_analyzed_at ? fmtKST(v.last_analyzed_at) : '-')}
                     </span>
                   </div>
-                  {v.key_logic && (
-                    <div className="border-l-2 border-violet-400 pl-3">
-                      <p className="text-xs font-medium text-violet-600 dark:text-violet-400 mb-1 flex items-center gap-1">
-                        <Key size={11} /> 핵심 논리
+                  {v.monitoring_contract && (
+                    <div className="border-l-2 border-emerald-500 pl-3">
+                      <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-1 flex items-center gap-1">
+                        <Bell size={11} /> Monitoring Contract
                       </p>
-                      <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed">{v.key_logic}</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{v.monitoring_contract}</p>
                     </div>
                   )}
                   {v.retired_at && v.retirement_reason && (
                     <p className="text-xs text-gray-400 dark:text-gray-500">
                       아카이브 사유: {v.retirement_reason} · {fmtKST(v.retired_at)}
                     </p>
+                  )}
+                  {/* 버전 삭제 — 현재 활성 버전이 아닌 경우에만 */}
+                  {!isActive && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => handleDeleteThesisVersion(v.id)}
+                        className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-600 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                        title="이 버전 삭제"
+                      >
+                        <Trash2 size={12} /> 버전 삭제
+                      </button>
+                    </div>
                   )}
                 </div>
               )
@@ -1660,30 +2064,35 @@ export default function ThesisPage() {
         </div>
       )}
 
-      {/* key_logic Confirm 모달 */}
+      {/* Monitoring Contract Confirm 모달 */}
       {showConfirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-md p-6 space-y-4">
+          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div>
               <h2 className="text-gray-900 dark:text-white font-semibold text-base flex items-center gap-2">
-                <Key size={16} className="text-violet-400" /> 핵심 논리 입력 후 Confirm
+                <Bell size={16} className="text-emerald-400" /> Monitoring Contract 입력 후 Confirm
               </h2>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Confirm 전 "이 논리가 깨지면 thesis가 무너진다"는 핵심 한 단락을 명문화하세요.
+                Confirm 전 Break Monitor가 감시할 계약서를 확정하세요.
               </p>
             </div>
 
-            <textarea
-              value={confirmKeyLogic}
-              onChange={e => setConfirmKeyLogic(e.target.value)}
-              placeholder='예: "매출 성장률이 분기 연속 10% 이하로 둔화되거나, 주요 고객 이탈률이 5% 이상 상승한다면 이 thesis는 재검토가 필요하다."'
-              rows={5}
-              autoFocus
-              className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
-            />
-            <p className="text-xs text-gray-400 dark:text-gray-500">
-              한 단락 · 측정 가능한 구체적 조건 포함 · 150~250자 권장
-            </p>
+            <div className="space-y-2">
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium">
+                Monitoring Contract <span className="text-gray-400 dark:text-gray-500 font-normal">(Break Monitor 기준)</span>
+              </label>
+              <textarea
+                value={confirmMonitoringContract}
+                onChange={e => setConfirmMonitoringContract(e.target.value)}
+                placeholder={'## Core Logic\n...\n\n## Break Conditions\n- ...\n\n## Strengthening Signals\n- ...\n\n## Watch Metrics\n- ...'}
+                rows={10}
+                autoFocus
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-emerald-600"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                Core Logic, Break Conditions, Strengthening Signals, Watch Metrics를 포함하세요.
+              </p>
+            </div>
 
             <div className="flex gap-3 justify-end pt-1">
               <button
@@ -1694,7 +2103,7 @@ export default function ThesisPage() {
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={!confirmKeyLogic.trim()}
+                disabled={!confirmMonitoringContract.trim()}
                 className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
               >
                 <CheckCircle size={14} /> Confirm
@@ -1787,6 +2196,20 @@ export default function ThesisPage() {
                 className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-blue-500"
               />
               <p className="text-xs text-gray-400 dark:text-gray-500">Journal의 "탐색결과"에서 가져온 인사이트나 보고서에서 건진 관점을 여기에 입력하면 thesis에 반영됩니다.</p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium flex items-center gap-1.5">
+                <Bell size={14} className="text-emerald-400" /> Monitoring Contract <span className="text-gray-400 dark:text-gray-500 font-normal">(선택)</span>
+              </label>
+              <textarea
+                value={modalMonitoringContract}
+                onChange={(e) => setModalMonitoringContract(e.target.value)}
+                placeholder={'외부 Claude의 "Seed Memo + 감시 계약서" 프롬프트에서 나온 Monitoring Contract를 붙여넣으세요.\n\n## Core Logic\n...\n\n## Break Conditions\n- ...\n\n## Strengthening Signals\n- ...\n\n## Watch Metrics\n- ...'}
+                rows={5}
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500">입력하면 앱 AI는 이 계약서를 보존·정리하고, Break Monitor는 이 내용을 기준으로 감시합니다.</p>
             </div>
 
             <div className="flex gap-3 justify-end pt-1">

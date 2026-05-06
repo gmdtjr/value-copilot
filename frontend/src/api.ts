@@ -38,11 +38,11 @@ export const api = {
     return res.json()
   },
 
-  async confirmThesis(tickerId: string, keyLogic?: string): Promise<Thesis> {
+  async confirmThesis(tickerId: string, monitoringContract?: string): Promise<Thesis> {
     const res = await fetch(`${BASE}/thesis/${tickerId}/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key_logic: keyLogic ?? null }),
+      body: JSON.stringify({ monitoring_contract: monitoringContract ?? null }),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -162,12 +162,12 @@ export const api = {
   /**
    * SSE 스트림으로 Thesis 생성.
    * onChunk: 실시간 텍스트 청크
-   * onComplete: 완성된 4섹션
+   * onComplete: 완성된 thesis 섹션들
    * Returns AbortController to cancel.
    */
   analyzeStream(
     tickerId: string,
-    body: { stock_type: string; seed_memo: string; exploration_note?: string },
+    body: { stock_type: string; seed_memo: string; exploration_note?: string; monitoring_contract?: string },
     callbacks: {
       onStart?: (symbol: string) => void
       onChunk: (text: string) => void
@@ -185,7 +185,8 @@ export const api = {
     })
       .then(async (res) => {
         if (!res.ok) {
-          callbacks.onError(`HTTP ${res.status}`)
+          const err = await res.json().catch(() => ({ detail: res.statusText }))
+          callbacks.onError(err.detail || `HTTP ${res.status}`)
           return
         }
         const reader = res.body!.getReader()

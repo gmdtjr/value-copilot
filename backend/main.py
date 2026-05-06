@@ -13,6 +13,9 @@ from routes.tradelog import router as tradelog_router
 from routes.ideas import router as ideas_router
 from routes.conversations import router as conversations_router
 from routes.human_responses import router as human_responses_router
+from routes.break_signals import router as break_signals_router
+from routes.cycles import router as cycles_router
+from routes.retrospectives import router as retrospectives_router
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,6 +52,9 @@ app.include_router(tradelog_router, prefix="/api/tradelog", tags=["tradelog"])
 app.include_router(ideas_router, prefix="/api/ideas", tags=["ideas"])
 app.include_router(conversations_router, prefix="/api/conversations", tags=["conversations"])
 app.include_router(human_responses_router, prefix="/api/human-responses", tags=["human_responses"])
+app.include_router(break_signals_router, prefix="/api/break-signals", tags=["break_signals"])
+app.include_router(cycles_router, prefix="/api/cycles", tags=["cycles"])
+app.include_router(retrospectives_router, prefix="/api/retrospectives", tags=["retrospectives"])
 
 
 @app.on_event("startup")
@@ -86,6 +92,12 @@ async def startup():
         try:
             _ac.execute(_text(
                 "ALTER TYPE thesisstatusenum ADD VALUE IF NOT EXISTS 'retired';"
+            ))
+        except Exception:
+            pass
+        try:
+            _ac.execute(_text(
+                "ALTER TYPE verdictenum ADD VALUE IF NOT EXISTS 'strengthening';"
             ))
         except Exception:
             pass
@@ -157,10 +169,63 @@ async def startup():
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS parent_version_id UUID;"))
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS exploration_note TEXT;"))
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS key_logic TEXT;"))
+        conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS monitoring_contract TEXT;"))
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP;"))
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS retirement_reason VARCHAR(50);"))
         # Phase 2: 기존 thesis에 version_number=1 백필
         conn.execute(_text("UPDATE theses SET version_number = 1 WHERE version_number IS NULL OR version_number = 0;"))
+        # Phase 4: investment_cycles 테이블
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS investment_cycles (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                ticker_id UUID NOT NULL REFERENCES tickers(id) ON DELETE CASCADE,
+                thesis_id UUID REFERENCES theses(id) ON DELETE SET NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'open',
+                opened_at TIMESTAMP NOT NULL,
+                closed_at TIMESTAMP,
+                exit_reason VARCHAR(30),
+                exit_reason_note TEXT,
+                pnl_pct FLOAT
+            );
+        """))
+        # Phase 4: retrospectives 테이블
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS retrospectives (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                cycle_id UUID NOT NULL UNIQUE REFERENCES investment_cycles(id) ON DELETE CASCADE,
+                is_draft BOOLEAN NOT NULL DEFAULT TRUE,
+                original_logic TEXT NOT NULL,
+                what_changed TEXT,
+                logic_held BOOLEAN,
+                weak_link TEXT,
+                if_wrong_why TEXT,
+                if_right_why TEXT,
+                next_time TEXT,
+                completed_at TIMESTAMP
+            );
+        """))
+        # Phase 4: trade_logs에 cycle_id 추가
+        conn.execute(_text(
+            "ALTER TABLE trade_logs ADD COLUMN IF NOT EXISTS cycle_id UUID REFERENCES investment_cycles(id) ON DELETE SET NULL;"
+        ))
+        # Phase 3: break_signals 테이블
+        conn.execute(_text("""
+            CREATE TABLE IF NOT EXISTS break_signals (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                thesis_id UUID NOT NULL REFERENCES theses(id) ON DELETE CASCADE,
+                checked_at TIMESTAMP DEFAULT now(),
+                key_logic_snapshot TEXT,
+                observations TEXT NOT NULL,
+                positive_signals TEXT,
+                negative_signals TEXT,
+                watch_items TEXT,
+                verdict VARCHAR(20),
+                human_note TEXT,
+                reviewed_at TIMESTAMP
+            );
+        """))
+        conn.execute(_text("ALTER TABLE break_signals ADD COLUMN IF NOT EXISTS positive_signals TEXT;"))
+        conn.execute(_text("ALTER TABLE break_signals ADD COLUMN IF NOT EXISTS negative_signals TEXT;"))
         # conversation_imports 테이블
         conn.execute(_text("""
             CREATE TABLE IF NOT EXISTS conversation_imports (

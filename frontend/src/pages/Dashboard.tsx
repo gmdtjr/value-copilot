@@ -90,6 +90,7 @@ export default function Dashboard() {
   const [bulkAction, setBulkAction] = useState<BulkAction | null>(null)
   const [jobStatuses, setJobStatuses] = useState<Record<string, JobState>>({})
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const clearJobRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     api.getTickers()
@@ -110,13 +111,21 @@ export default function Dashboard() {
       .catch(() => null)
     // 진행 중인 bulk 작업 복원
     restoreBulkStatus()
-    return () => stopPolling()
+    return () => {
+      stopPolling()
+      if (clearJobRef.current) clearTimeout(clearJobRef.current)
+    }
   }, [])
 
   // ── Bulk status polling ────────────────────────────────────────────────────
 
   function applyBulkStatus(data: any) {
-    if (!data.active || !data.items?.length) return
+    if (!data.active || !data.items?.length) {
+      setBulkRunning(false)
+      setBulkAction(null)
+      setJobStatuses({})
+      return
+    }
     const statuses: Record<string, JobState> = {}
     for (const item of data.items) {
       statuses[item.ticker_id] = { status: item.status as JobStatus, msg: item.msg ?? undefined }
@@ -130,7 +139,10 @@ export default function Dashboard() {
       const res = await fetch('/api/tickers/bulk-status')
       if (!res.ok) return
       const data = await res.json()
-      if (!data.active || !data.items?.length) return
+      if (!data.active || !data.items?.length) {
+        applyBulkStatus(data)
+        return
+      }
       applyBulkStatus(data)
       const allDone = data.items.every((i: any) => i.status === 'done' || i.status === 'error')
       if (!allDone) startPolling()
@@ -144,12 +156,25 @@ export default function Dashboard() {
         const res = await fetch('/api/tickers/bulk-status')
         if (!res.ok) return
         const data = await res.json()
-        if (!data.active) { stopPolling(); return }
+        if (!data.active) {
+          stopPolling()
+          setBulkRunning(false)
+          setBulkAction(null)
+          setJobStatuses({})
+          api.getTickers().then(setTickers)
+          return
+        }
         applyBulkStatus(data)
         const allDone = data.items.every((i: any) => i.status === 'done' || i.status === 'error')
         if (allDone) {
           stopPolling()
           api.getTickers().then(setTickers)
+          if (clearJobRef.current) clearTimeout(clearJobRef.current)
+          clearJobRef.current = setTimeout(() => {
+            setBulkRunning(false)
+            setBulkAction(null)
+            setJobStatuses({})
+          }, 3000)
         }
       } catch { /* ignore */ }
     }, 5000)
@@ -204,6 +229,10 @@ export default function Dashboard() {
 
     setBulkAction(action)
     setBulkRunning(true)
+    if (clearJobRef.current) {
+      clearTimeout(clearJobRef.current)
+      clearJobRef.current = null
+    }
     stopPolling()
 
     const endpoints: Record<BulkAction, string> = {
@@ -837,11 +866,18 @@ export default function Dashboard() {
               return a.symbol.localeCompare(b.symbol)
             })
 
+          function cycledays(openedAt: string | null | undefined): number | null {
+            if (!openedAt) return null
+            const normalized = openedAt.endsWith('Z') ? openedAt : openedAt + 'Z'
+            return Math.floor((Date.now() - new Date(normalized).getTime()) / 86400000)
+          }
+
           function TickerCard({ ticker }: { ticker: typeof tickers[0] }) {
             const p = ticker.status === 'portfolio' && ticker.portfolio_current_price != null
             const dailyPct = ticker.portfolio_daily_pct
             const pnlPct = ticker.portfolio_pnl_pct ?? 0
             const isSelected = selectedIds.has(ticker.id)
+            const cycleDays = cycledays(ticker.open_cycle_opened_at)
             return (
               <div
                 className={`bg-gray-50 dark:bg-gray-900 border rounded-xl px-5 py-4 transition-colors ${
@@ -876,10 +912,15 @@ export default function Dashboard() {
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{ticker.symbol}</span>
                         <span className="text-xs text-gray-500 dark:text-gray-600">·</span>
                         <span className="text-xs text-gray-400 dark:text-gray-500">{ticker.market === 'US_Stock' ? 'US' : 'KR'}</span>
+                        {cycleDays !== null && (
+                          <span className="text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0 rounded-full leading-5">
+                            📈 {cycleDays}일째
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>

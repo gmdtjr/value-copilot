@@ -103,6 +103,7 @@ class AnalyzeBody(BaseModel):
     stock_type: str
     seed_memo: str
     exploration_note: Optional[str] = None
+    monitoring_contract: Optional[str] = None
 
 
 class RefineBody(BaseModel):
@@ -134,6 +135,7 @@ class TickerResponse(BaseModel):
     portfolio_daily_pct: Optional[float] = None
     portfolio_pnl_pct: Optional[float] = None
     valley_url: Optional[str] = None
+    open_cycle_opened_at: Optional[str] = None  # 진행 중인 사이클 시작일
 
     class Config:
         from_attributes = True
@@ -144,7 +146,21 @@ class TickerResponse(BaseModel):
 @router.get("", response_model=list[TickerResponse])
 def list_tickers(db: Session = Depends(get_db)):
     from sqlalchemy.orm import selectinload
+    from models.db import InvestmentCycle, CycleStatusEnum
     tickers = db.query(Ticker).options(selectinload(Ticker.theses)).order_by(Ticker.created_at.desc()).all()
+
+    # 진행 중 사이클 일괄 조회 (N+1 방지)
+    open_cycles: dict = {}
+    try:
+        tid_list = [t.id for t in tickers]
+        for c in db.query(InvestmentCycle).filter(
+            InvestmentCycle.ticker_id.in_(tid_list),
+            InvestmentCycle.status == CycleStatusEnum.OPEN,
+        ).all():
+            open_cycles[str(c.ticker_id)] = c.opened_at.isoformat()
+    except Exception:
+        pass  # investment_cycles 테이블 미생성 환경 graceful fallback
+
     result = []
     for t in tickers:
         p = t.portfolio
@@ -172,6 +188,7 @@ def list_tickers(db: Session = Depends(get_db)):
             portfolio_daily_pct=daily_pct,
             portfolio_pnl_pct=pnl_pct,
             valley_url=get_cached_valley_url(db, str(t.id)),
+            open_cycle_opened_at=open_cycles.get(str(t.id)),
         ))
     return result
 
@@ -241,16 +258,22 @@ def trigger_break_monitor(ticker_id: str, background_tasks: BackgroundTasks, db:
     )
     if not thesis:
         raise HTTPException(status_code=400, detail="confirmed 상태의 thesis가 없습니다.")
+    key_logic = getattr(thesis, 'key_logic', None) or ""
+    monitoring_contract = getattr(thesis, 'monitoring_contract', None) or ""
     background_tasks.add_task(
         _run_break_monitor_task,
-        str(ticker.id), ticker.symbol, ticker.name,
-        thesis.thesis or "", thesis.key_assumptions or "",
+        str(ticker.id), str(thesis.id), ticker.symbol, ticker.name,
+        key_logic, monitoring_contract, thesis.key_assumptions or "",
+        thesis.stock_type.value if thesis.stock_type else "",
     )
     return {"message": f"{ticker.symbol} Break Monitor 시작됨"}
 
 
-def _run_break_monitor_task(ticker_id: str, symbol: str, name: str, thesis: str, key_assumptions: str):
-    from models.db import SessionLocal
+def _run_break_monitor_task(
+    ticker_id: str, thesis_id: str, symbol: str, name: str,
+    key_logic: str, monitoring_contract: str, key_assumptions: str, stock_type: str = "",
+):
+    from models.db import SessionLocal, BreakSignal
     from services.scheduler import _get_cache, _fmt_news_full, _fmt_metrics
     db = SessionLocal()
     try:
@@ -258,14 +281,30 @@ def _run_break_monitor_task(ticker_id: str, symbol: str, name: str, thesis: str,
         metrics_data = _get_cache(db, ticker_id, "metrics")
         result = run_break_monitor(
             symbol=symbol, name=name, ticker_id=ticker_id,
-            thesis=thesis, key_assumptions=key_assumptions,
+            key_logic=key_logic, monitoring_contract=monitoring_contract, key_assumptions=key_assumptions,
             news_context=_fmt_news_full(news_data, limit=7),
             metrics_context=_fmt_metrics(metrics_data),
+            stock_type=stock_type,
         )
-        notify_break_monitor(symbol, name, result["signal"], result.get("assessment", ""), ticker_id=ticker_id)
-        logger.info("Break Monitor %s → %s", symbol, result["signal"])
+        # BreakSignal 저장
+        signal = BreakSignal(
+            thesis_id=thesis_id,
+            key_logic_snapshot=result.get("key_logic_snapshot") or key_logic or None,
+            observations=result.get("observations", result.get("full_text", "")),
+            positive_signals=result.get("positive_signals"),
+            negative_signals=result.get("negative_signals"),
+            watch_items=result.get("watch_items"),
+        )
+        db.add(signal)
+        db.commit()
+        notify_break_monitor(symbol, name, result.get("observations", ""), ticker_id=ticker_id)
+        logger.info("Break Monitor 완료: %s (signal_id=%s)", symbol, signal.id)
     except Exception:
         logger.exception("Break Monitor 실패: %s", symbol)
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -320,6 +359,7 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
             stock_type=body.stock_type,
             seed_memo=body.seed_memo,
             exploration_note=body.exploration_note,
+            monitoring_contract=body.monitoring_contract,
         )
         db.add(new_thesis)
         db.flush()
@@ -331,6 +371,8 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
         active.seed_memo = body.seed_memo
         if body.exploration_note:
             active.exploration_note = body.exploration_note
+        if body.monitoring_contract:
+            active.monitoring_contract = body.monitoring_contract
         db.flush()
         target_id = str(active.id)
     else:
@@ -353,6 +395,8 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
                 financial_context=financial_context,
                 stock_type=body.stock_type,
                 seed_memo=body.seed_memo,
+                exploration_note=body.exploration_note or "",
+                monitoring_contract=body.monitoring_contract or "",
             ):
                 if sse_str.startswith("data:"):
                     try:
@@ -377,7 +421,7 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
                     t.risk = sections.get("risk")
                     t.key_assumptions = sections.get("key_assumptions")
                     t.valuation = sections.get("valuation")
-                    t.key_logic = sections.get("key_logic")
+                    t.monitoring_contract = sections.get("monitoring_contract") or body.monitoring_contract
                     t.last_analyzed_at = datetime.utcnow()
                     local_db.commit()
                     logger.info("Thesis saved for %s (v%s)", ticker_symbol, t.version_number)
@@ -427,6 +471,8 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
         "risk": thesis.risk or "",
         "key_assumptions": thesis.key_assumptions or "",
         "valuation": thesis.valuation or "",
+        "key_logic": getattr(thesis, "key_logic", None) or "",
+        "monitoring_contract": getattr(thesis, "monitoring_contract", None) or "",
     }
     target_id = str(thesis.id)
     ticker_symbol = ticker.symbol
@@ -468,7 +514,7 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
                     t.risk = sections.get("risk")
                     t.key_assumptions = sections.get("key_assumptions")
                     t.valuation = sections.get("valuation")
-                    t.key_logic = sections.get("key_logic")
+                    t.monitoring_contract = sections.get("monitoring_contract")
                     t.last_analyzed_at = datetime.utcnow()
                     local_db.commit()
                     logger.info("Thesis refined for %s", ticker_symbol)
@@ -485,7 +531,12 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
 
 
 @router.get("/{ticker_id}/explore-prompt")
-def get_ticker_explore_prompt(ticker_id: str, type: str = "deep_analysis", db: Session = Depends(get_db)):
+def get_ticker_explore_prompt(
+    ticker_id: str,
+    type: str = "deep_analysis",
+    signal_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     """Step 3 (종목 집중 분석) / Step 4 (반대 논거 탐색) 외부 Claude 프롬프트 생성."""
     ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
     if not ticker:
@@ -499,6 +550,10 @@ def get_ticker_explore_prompt(ticker_id: str, type: str = "deep_analysis", db: S
             prompt = _build_deep_analysis_prompt(db, ticker, thesis)
         elif type == "thesis_challenge":
             prompt = _build_thesis_challenge_prompt(db, ticker, thesis)
+        elif type == "monitoring_contract":
+            prompt = _build_monitoring_contract_prompt(db, ticker, thesis)
+        elif type == "thesis_revision":
+            prompt = _build_thesis_revision_prompt(db, ticker, thesis, signal_id)
         else:
             raise HTTPException(status_code=400, detail=f"알 수 없는 type: {type}")
         return {"prompt": prompt}
@@ -607,11 +662,11 @@ def _build_thesis_challenge_prompt(db, ticker, thesis) -> str:
                 thesis.thesis[:600] + ("..." if len(thesis.thesis) > 600 else ""),
                 "",
             ])
-        key_logic = getattr(thesis, 'key_logic', None)
-        if key_logic:
+        monitoring_contract = getattr(thesis, 'monitoring_contract', None)
+        if monitoring_contract:
             lines.extend([
-                "## 내가 생각하는 핵심 논리 (key_logic)",
-                key_logic,
+                "## 내가 확정한 Monitoring Contract",
+                monitoring_contract,
                 "",
             ])
         if thesis.risk:
@@ -641,6 +696,197 @@ def _build_thesis_challenge_prompt(db, ticker, thesis) -> str:
         "4. **thesis를 강화하려면 무엇을 더 확인해야 하는가?**",
         "",
         "반박을 통해 논리를 강화하는 것이 목적입니다. 투자 추천은 하지 마세요.",
+    ])
+
+    return "\n".join(lines)
+
+
+def _build_monitoring_contract_prompt(db, ticker, thesis) -> str:
+    """외부 Claude 대화의 마지막 단계: Seed Memo + Monitoring Contract 산출."""
+
+    lines = [
+        f"# {ticker.name} ({ticker.symbol}) 최종 Seed Memo + Monitoring Contract",
+        "",
+        "지금까지 이 대화에서 나눈 종목 분석, 반대 논거, 추가 리서치 내용을 하나의 최종 산출물로 압축해주세요.",
+        "목적은 value-copilot 앱에 붙여넣어 AI 분석과 Break Monitor의 기준으로 사용하는 것입니다.",
+        "",
+        "중요 원칙:",
+        "- 새로운 투자 추천을 하지 말고, 지금까지 대화에서 형성된 내 논리를 구조화하세요.",
+        "- 주가 등락, 목표가, 애널리스트 의견은 Core Logic에서 제외하세요.",
+        "- Monitoring Contract는 나중에 Break Monitor가 그대로 사용할 수 있게 측정 가능한 조건으로 쓰세요.",
+        "- 모호한 표현보다 수치, 일정, 사건, 공시 항목을 우선하세요.",
+        "",
+        f"## 종목 정보",
+        f"- 이름: {ticker.name}",
+        f"- 심볼: {ticker.symbol}",
+        f"- 시장: {ticker.market.value}",
+        "",
+    ]
+
+    if thesis:
+        if thesis.seed_memo:
+            lines.extend(["## 현재 seed_memo 초안", thesis.seed_memo, ""])
+        if thesis.thesis:
+            lines.extend(["## 현재 thesis 초안", thesis.thesis[:1000] + ("..." if len(thesis.thesis) > 1000 else ""), ""])
+        if thesis.risk:
+            lines.extend(["## 현재 risk 초안", thesis.risk[:1000] + ("..." if len(thesis.risk) > 1000 else ""), ""])
+        monitoring_contract = getattr(thesis, 'monitoring_contract', None)
+        if monitoring_contract:
+            lines.extend(["## 현재 Monitoring Contract", monitoring_contract, ""])
+
+    lines.extend([
+        "## 출력 형식",
+        "",
+        "아래 두 블록만 출력하세요.",
+        "",
+        "```markdown",
+        "# Seed Memo",
+        "",
+        "## One-liner",
+        "> ...",
+        "",
+        "## Why Interesting Now",
+        "...",
+        "",
+        "## Business / Asset Layers",
+        "...",
+        "",
+        "## Core Thesis",
+        "...",
+        "",
+        "## Bear Case",
+        "...",
+        "",
+        "## Thesis Break Conditions",
+        "- ...",
+        "",
+        "## Monitoring Metrics",
+        "- ...",
+        "",
+        "# Monitoring Contract",
+        "",
+        "## Core Logic",
+        "이 thesis가 성립하려면 반드시 유지되어야 하는 Core Logic을 1~2문단으로 작성.",
+        "",
+        "## Break Conditions",
+        "- 측정 가능한 파기 조건 3~7개",
+        "",
+        "## Strengthening Signals",
+        "- thesis가 강화되어 추가 리서치/추가 검토를 유도할 수 있는 조건 3~7개",
+        "- 자동 매수/매도 표현은 금지",
+        "",
+        "## Watch Metrics",
+        "- Break Monitor가 추적할 지표/뉴스/공시 항목 5~10개",
+        "",
+        "## Grace Period / Review Timing",
+        "- 어떤 항목은 즉시 재검토인지, 어떤 항목은 1~2분기 관찰인지 구분",
+        "```",
+        "",
+        "마지막으로, Seed Memo와 Monitoring Contract 사이에 모순이 없게 정리해주세요.",
+    ])
+
+    return "\n".join(lines)
+
+
+def _build_thesis_revision_prompt(db, ticker, thesis, signal_id: Optional[str] = None) -> str:
+    """Break Monitor 결과를 외부 Claude 대화에서 재검토하도록 만드는 프롬프트."""
+    from models.db import BreakSignal
+
+    signal = None
+    if signal_id:
+        signal = db.query(BreakSignal).filter(BreakSignal.id == signal_id).first()
+
+    lines = [
+        f"# {ticker.name} ({ticker.symbol}) Thesis 재검토",
+        "",
+        "아래 confirmed thesis와 Break Monitor 관찰 결과를 바탕으로, thesis를 유지/강화/수정/파기해야 할 논리적 이유를 검토해주세요.",
+        "목적은 자동 매수/매도가 아니라, value-copilot에 붙여넣을 새 thesis 버전의 seed memo와 monitoring contract를 보완하는 것입니다.",
+        "",
+        "중요 원칙:",
+        "- 주가 등락, 목표가, 애널리스트 의견은 제외하세요.",
+        "- Break Monitor의 positive_signals는 thesis 강화 가능성으로, negative_signals는 thesis 약화 가능성으로 검토하세요.",
+        "- 결론은 행동 지시가 아니라 '사람이 확인할 논리 변화'로 작성하세요.",
+        "- 기존 thesis가 아직 유효하다면 무엇을 더 확인해야 하는지, 수정이 필요하다면 어느 섹션을 어떻게 고칠지 제안하세요.",
+        "",
+        "## 종목 정보",
+        f"- 이름: {ticker.name}",
+        f"- 심볼: {ticker.symbol}",
+        f"- 시장: {ticker.market.value}",
+        "",
+    ]
+
+    if thesis:
+        if thesis.seed_memo:
+            lines.extend(["## 기존 Seed Memo", thesis.seed_memo, ""])
+        if thesis.thesis:
+            lines.extend(["## 기존 Thesis", thesis.thesis, ""])
+        if thesis.risk:
+            lines.extend(["## 기존 Risk", thesis.risk, ""])
+        if thesis.key_assumptions:
+            lines.extend(["## 기존 Key Assumptions", thesis.key_assumptions, ""])
+        if getattr(thesis, 'monitoring_contract', None):
+            lines.extend(["## 기존 Monitoring Contract", thesis.monitoring_contract, ""])
+
+    if signal:
+        lines.extend([
+            "## Break Monitor 관찰 결과",
+            f"- 체크 시점: {signal.checked_at.isoformat()}",
+            "",
+            "### Observations",
+            signal.observations or "(없음)",
+            "",
+        ])
+        if signal.positive_signals:
+            lines.extend(["### Positive Signals", signal.positive_signals, ""])
+        if signal.negative_signals:
+            lines.extend(["### Negative Signals", signal.negative_signals, ""])
+        if signal.watch_items:
+            lines.extend(["### Watch Items", signal.watch_items, ""])
+        if signal.verdict:
+            lines.extend(["### Human Verdict", signal.verdict.value, ""])
+        if signal.human_note:
+            lines.extend(["### Human Note", signal.human_note, ""])
+    else:
+        lines.extend([
+            "## Break Monitor 관찰 결과",
+            "(특정 signal_id가 제공되지 않았습니다. 사용자가 아래에 관찰 결과를 붙여넣을 수 있게 질문하며 진행하세요.)",
+            "",
+        ])
+
+    lines.extend([
+        "## 출력 형식",
+        "",
+        "아래 형식으로만 출력하세요.",
+        "",
+        "```markdown",
+        "# Revision Assessment",
+        "",
+        "## What Changed",
+        "- 이번 관찰에서 thesis의 어떤 연결고리가 강화/약화되었는가",
+        "",
+        "## Thesis Update Needed?",
+        "- 유지 / 보완 / 재검토 / 파기 중 하나",
+        "- 이유",
+        "",
+        "## Proposed Seed Memo Delta",
+        "- 기존 seed memo에 추가/수정할 문장",
+        "",
+        "## Proposed Risk Delta",
+        "- risk 섹션에 추가/수정할 내용",
+        "",
+        "## Proposed Monitoring Contract Delta",
+        "### Core Logic",
+        "...",
+        "### Break Conditions",
+        "- ...",
+        "### Strengthening Signals",
+        "- ...",
+        "### Watch Metrics",
+        "- ...",
+        "",
+        "## Questions Before Confirm",
+        "- 사람이 확인해야 할 데이터/공시/가정",
+        "```",
     ])
 
     return "\n".join(lines)
@@ -800,6 +1046,8 @@ def get_bulk_status():
     with _job_lock:
         if _current_job is None:
             return {"active": False, "action": None, "items": [], "started_at": None, "finished_at": None}
+        if _current_job.get("finished_at") is not None:
+            return {"active": False, **copy.deepcopy(_current_job)}
         return {"active": True, **copy.deepcopy(_current_job)}
 
 
@@ -961,7 +1209,7 @@ def _run_bulk_analyze(jobs: list[tuple]):
     from services.financial_data import fetch_all
     for i, (ticker_id, symbol, name, market) in enumerate(jobs):
         if i > 0:
-            time.sleep(20)  # thesis max_tokens=4096, 종목간 20초 쿨다운
+            time.sleep(20)  # thesis max_tokens=8192, 종목간 20초 쿨다운
         _job_update(ticker_id, "running")
         db = SessionLocal()
         try:
@@ -973,10 +1221,14 @@ def _run_bulk_analyze(jobs: list[tuple]):
                 financial_context = ""
             thesis = db.query(Thesis).filter(Thesis.ticker_id == ticker_id).first()
             existing_stock_type = thesis.stock_type if thesis and thesis.stock_type else "compounding"
-            existing_seed_memo = thesis.seed_memo or ""
+            existing_seed_memo = thesis.seed_memo if thesis and thesis.seed_memo else ""
+            existing_exploration_note = getattr(thesis, "exploration_note", None) or ""
+            existing_monitoring_contract = getattr(thesis, "monitoring_contract", None) or ""
             sections = generate_thesis(symbol=symbol, name=name, market=market,
                                        ticker_id=ticker_id, financial_context=financial_context,
-                                       stock_type=existing_stock_type, seed_memo=existing_seed_memo)
+                                       stock_type=existing_stock_type, seed_memo=existing_seed_memo,
+                                       exploration_note=existing_exploration_note,
+                                       monitoring_contract=existing_monitoring_contract)
             if not thesis:
                 thesis = Thesis(ticker_id=ticker_id, confirmed=ThesisStatusEnum.DRAFT)
                 db.add(thesis)
@@ -984,6 +1236,7 @@ def _run_bulk_analyze(jobs: list[tuple]):
             thesis.risk = sections.get("risk")
             thesis.key_assumptions = sections.get("key_assumptions")
             thesis.valuation = sections.get("valuation")
+            thesis.monitoring_contract = sections.get("monitoring_contract")
             thesis.last_analyzed_at = datetime.utcnow()
             db.commit()
             _job_update(ticker_id, "done")

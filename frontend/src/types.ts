@@ -19,6 +19,7 @@ export interface Ticker {
   portfolio_daily_pct: number | null
   portfolio_pnl_pct: number | null
   valley_url?: string | null
+  open_cycle_opened_at?: string | null  // 진행 중인 InvestmentCycle 시작일
 }
 
 export interface Thesis {
@@ -37,6 +38,7 @@ export interface Thesis {
   version_number: number
   parent_version_id: string | null
   key_logic: string | null
+  monitoring_contract: string | null
   exploration_note: string | null
   retired_at: string | null
   retirement_reason: string | null
@@ -78,6 +80,57 @@ export type SseEvent =
   | { type: 'chunk'; text: string }
   | { type: 'complete'; sections: Record<string, string> }
   | { type: 'error'; message: string }
+
+export type ExitReasonType = 'logic_broken' | 'target_reached' | 'better_opportunity' | 'mistake' | 'other'
+
+export interface InvestmentCycle {
+  id: string
+  ticker_id: string
+  ticker_symbol: string | null
+  ticker_name: string | null
+  thesis_id: string | null
+  thesis_key_logic: string | null
+  status: 'open' | 'closed'
+  opened_at: string
+  closed_at: string | null
+  exit_reason: ExitReasonType | null
+  exit_reason_note: string | null
+  pnl_pct: number | null
+  has_retrospective: boolean
+}
+
+export interface Retrospective {
+  id: string
+  cycle_id: string
+  is_draft: boolean
+  original_logic: string
+  what_changed: string | null
+  logic_held: boolean | null
+  weak_link: string | null
+  if_wrong_why: string | null
+  if_right_why: string | null
+  next_time: string | null
+  completed_at: string | null
+}
+
+export type VerdictType = 'strengthening' | 'intact' | 'weakening' | 'broken'
+
+export interface BreakSignal {
+  id: string
+  thesis_id: string
+  ticker_id: string | null
+  ticker_symbol: string | null
+  ticker_name: string | null
+  checked_at: string
+  key_logic_snapshot: string | null
+  observations: string
+  positive_signals: string | null
+  negative_signals: string | null
+  watch_items: string | null
+  verdict: VerdictType | null
+  human_note: string | null
+  reviewed_at: string | null
+}
 
 export type ConversationImportType = 'discovery' | 'thesis_challenge' | 'portfolio_review' | 'deep_analysis'
 

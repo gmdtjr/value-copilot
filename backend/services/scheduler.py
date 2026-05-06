@@ -89,30 +89,56 @@ def run_break_monitor_job():
 
         for ticker in targets:
             try:
+                thesis = ticker.thesis
+                if not thesis:
+                    continue
+
                 # 뉴스 + 지표 캐시에서 조회
                 news_data = _get_cache(db, str(ticker.id), "news")
                 metrics_data = _get_cache(db, str(ticker.id), "metrics")
                 news_context = _fmt_news_full(news_data, limit=7)
                 metrics_context = _fmt_metrics(metrics_data)
 
+                key_logic = getattr(thesis, 'key_logic', None) or ""
+                monitoring_contract = getattr(thesis, 'monitoring_contract', None) or ""
+
                 result = run_break_monitor(
                     symbol=ticker.symbol,
                     name=ticker.name,
                     ticker_id=str(ticker.id),
-                    thesis=ticker.thesis.thesis or "",
-                    key_assumptions=ticker.thesis.key_assumptions or "",
+                    key_logic=key_logic,
+                    monitoring_contract=monitoring_contract,
+                    key_assumptions=thesis.key_assumptions or "",
                     news_context=news_context,
                     metrics_context=metrics_context,
-                    stock_type=ticker.thesis.stock_type or "",
+                    stock_type=thesis.stock_type or "",
                 )
+
+                # BreakSignal DB 저장
+                from models.db import BreakSignal
+                signal = BreakSignal(
+                    thesis_id=thesis.id,
+                    key_logic_snapshot=result.get("key_logic_snapshot") or key_logic or None,
+                    observations=result.get("observations", result.get("full_text", "")),
+                    positive_signals=result.get("positive_signals"),
+                    negative_signals=result.get("negative_signals"),
+                    watch_items=result.get("watch_items"),
+                )
+                db.add(signal)
+                db.commit()
+
                 notify_break_monitor(
                     ticker.symbol, ticker.name,
-                    result["signal"], result.get("assessment", ""),
+                    result.get("observations", ""),
                     ticker_id=str(ticker.id),
                 )
-                logger.info("Break Monitor %s → %s", ticker.symbol, result["signal"])
+                logger.info("Break Monitor 완료: %s (signal_id=%s)", ticker.symbol, signal.id)
             except Exception:
                 logger.exception("Break Monitor 실패: %s", ticker.symbol)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
     finally:
         db.close()
 
@@ -163,7 +189,31 @@ def run_weekly_briefing_job():
                     "status": t.status.value,
                 })
 
-        sections = generate_weekly_briefing(portfolio_summary, macro_context=macro_context)
+        # 지난주 Break Signal 요약 수집
+        from models.db import BreakSignal
+        from datetime import timedelta
+        week_ago = datetime.utcnow() - timedelta(days=7)
+        signal_summaries: list[str] = []
+        try:
+            signals = (
+                db.query(BreakSignal)
+                .filter(BreakSignal.checked_at >= week_ago)
+                .order_by(BreakSignal.checked_at.desc())
+                .limit(20)
+                .all()
+            )
+            for s in signals:
+                verdict_str = f" [{s.verdict.value.upper()}]" if s.verdict else " [판정 대기]"
+                obs_snippet = (s.observations or "")[:120].replace("\n", " ")
+                signal_summaries.append(f"{s.checked_at.strftime('%m/%d')}{verdict_str} {obs_snippet}")
+        except Exception:
+            pass  # break_signals 테이블 없을 경우 skip
+
+        sections = generate_weekly_briefing(
+            portfolio_summary,
+            macro_context=macro_context,
+            signal_summaries=signal_summaries,
+        )
 
         report = Report(ticker_id=None, type=ReportTypeEnum.DAILY_BRIEF, content=sections["full_text"])
         db.add(report)

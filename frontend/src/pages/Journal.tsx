@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag, PenLine, Globe, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowLeft, BookOpen, Pencil, Check, X, Trash2, Loader2, Lightbulb, Plus, Tag, PenLine, Globe, ChevronDown, ChevronUp, RefreshCw, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { fmtKST } from '../utils/date'
 import { ThemeControls } from '../components/ThemeControls'
-import type { Ticker, ConversationImport, ConversationImportType } from '../types'
+import type { Ticker, ConversationImport, ConversationImportType, InvestmentCycle, Retrospective, ExitReasonType } from '../types'
 
 // ── TradeLog types & helpers ──────────────────────────────────────────────────
 
@@ -745,7 +745,255 @@ function ConversationComposer({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type Tab = 'trade' | 'idea' | 'conversation'
+type Tab = 'trade' | 'idea' | 'conversation' | 'retro'
+
+// ── 복기 관련 상수 ─────────────────────────────────────────────────────────────
+
+const EXIT_REASON_LABEL: Record<ExitReasonType, string> = {
+  logic_broken:        '핵심 논리 붕괴',
+  target_reached:      '목표 달성',
+  better_opportunity:  '더 좋은 기회',
+  mistake:             '처음부터 실수',
+  other:               '기타',
+}
+const EXIT_REASON_COLOR: Record<ExitReasonType, string> = {
+  logic_broken:        'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+  target_reached:      'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  better_opportunity:  'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  mistake:             'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+  other:               'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+}
+
+// ── RetrospectiveEditor ───────────────────────────────────────────────────────
+
+function RetrospectiveEditor({
+  cycle,
+  retro,
+  onUpdate,
+}: {
+  cycle: InvestmentCycle
+  retro: Retrospective | null
+  onUpdate: (updated: Retrospective) => void
+}) {
+  const [exitReason, setExitReason] = useState<ExitReasonType | ''>(cycle.exit_reason ?? '')
+  const [exitNote, setExitNote] = useState(cycle.exit_reason_note ?? '')
+  const [fields, setFields] = useState({
+    what_changed: retro?.what_changed ?? '',
+    logic_held: retro?.logic_held ?? null as boolean | null,
+    weak_link: retro?.weak_link ?? '',
+    if_wrong_why: retro?.if_wrong_why ?? '',
+    if_right_why: retro?.if_right_why ?? '',
+    next_time: retro?.next_time ?? '',
+  })
+  const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [savingExit, setSavingExit] = useState(false)
+
+  async function saveExitReason() {
+    if (!exitReason) return
+    setSavingExit(true)
+    try {
+      await fetch(`/api/cycles/${cycle.id}/exit-reason`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ exit_reason: exitReason, exit_reason_note: exitNote || null }),
+      })
+    } finally { setSavingExit(false) }
+  }
+
+  async function generateDraft() {
+    setGenerating(true)
+    try {
+      const res = await fetch(`/api/retrospectives/${cycle.id}/generate`, { method: 'POST' })
+      if (res.ok) {
+        const updated: Retrospective = await res.json()
+        setFields(prev => ({
+          ...prev,
+          what_changed: updated.what_changed ?? prev.what_changed,
+          weak_link: updated.weak_link ?? prev.weak_link,
+          next_time: updated.next_time ?? prev.next_time,
+        }))
+        onUpdate(updated)
+      }
+    } finally { setGenerating(false) }
+  }
+
+  async function save(isDraft: boolean) {
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/retrospectives/${cycle.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...fields, is_draft: isDraft }),
+      })
+      if (res.ok) {
+        const updated: Retrospective = await res.json()
+        onUpdate(updated)
+      }
+    } finally { setSaving(false) }
+  }
+
+  const pnl = cycle.pnl_pct
+  const pnlColor = pnl === null ? '' : pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'
+
+  return (
+    <div className="space-y-5">
+      {/* 사이클 헤더 */}
+      <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-sm font-bold text-gray-900 dark:text-white">{cycle.ticker_name ?? cycle.ticker_symbol}</span>
+          {pnl !== null && (
+            <span className={`text-base font-semibold ${pnlColor}`}>
+              {pnl >= 0 ? <TrendingUp size={14} className="inline mr-1" /> : <TrendingDown size={14} className="inline mr-1" />}
+              {pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}%
+            </span>
+          )}
+          <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
+            {fmtKST(cycle.opened_at, 'date')} → {cycle.closed_at ? fmtKST(cycle.closed_at, 'date') : '진행중'}
+          </span>
+        </div>
+      </div>
+
+      {/* 청산 이유 */}
+      {!cycle.exit_reason && (
+        <div className="space-y-2">
+          <label className="text-xs font-medium text-gray-500 dark:text-gray-400">청산 이유</label>
+          <div className="flex flex-wrap gap-1.5">
+            {(Object.keys(EXIT_REASON_LABEL) as ExitReasonType[]).map(r => (
+              <button
+                key={r}
+                onClick={() => setExitReason(r)}
+                className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                  exitReason === r
+                    ? EXIT_REASON_COLOR[r] + ' border-transparent'
+                    : 'border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400'
+                }`}
+              >
+                {EXIT_REASON_LABEL[r]}
+              </button>
+            ))}
+          </div>
+          {exitReason && (
+            <div className="flex gap-2">
+              <input
+                value={exitNote}
+                onChange={e => setExitNote(e.target.value)}
+                placeholder="추가 설명 (선택)"
+                className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={saveExitReason}
+                disabled={savingExit}
+                className="flex items-center gap-1 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-lg"
+              >
+                {savingExit ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} 저장
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {cycle.exit_reason && (
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${EXIT_REASON_COLOR[cycle.exit_reason]}`}>
+            {EXIT_REASON_LABEL[cycle.exit_reason]}
+          </span>
+          {cycle.exit_reason_note && <span className="text-xs text-gray-500 dark:text-gray-400">{cycle.exit_reason_note}</span>}
+        </div>
+      )}
+
+      {/* original_logic */}
+      {cycle.thesis_key_logic && (
+        <div className="border-l-2 border-violet-400 pl-4 py-1">
+          <p className="text-xs font-medium text-violet-500 dark:text-violet-400 mb-1">진입 당시 핵심 논리 (불변)</p>
+          <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{cycle.thesis_key_logic}</p>
+        </div>
+      )}
+
+      {/* AI 초안 생성 버튼 */}
+      {retro?.is_draft !== false && (
+        <button
+          onClick={generateDraft}
+          disabled={generating}
+          className="flex items-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs font-medium px-4 py-2 rounded-lg transition-colors"
+        >
+          {generating ? <><Loader2 size={13} className="animate-spin" /> AI 복기 초안 생성 중...</> : <>✨ AI 복기 초안 생성</>}
+        </button>
+      )}
+
+      {/* what_changed */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-gray-600 dark:text-gray-300">실제로 무엇이 달랐는가?</label>
+        <textarea value={fields.what_changed} onChange={e => setFields(p => ({ ...p, what_changed: e.target.value }))}
+          placeholder="진입 시 예상한 것과 실제로 다르게 전개된 점..."
+          rows={4} className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 resize-none focus:outline-none focus:border-violet-500" />
+      </div>
+
+      {/* logic_held */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-gray-600 dark:text-gray-300">핵심 논리가 결국 맞았나요?</label>
+        <div className="flex gap-2">
+          {[{ v: true, label: '✅ 맞았다' }, { v: false, label: '❌ 틀렸다' }, { v: null, label: '— 판단 보류' }].map(({ v, label }) => (
+            <button key={String(v)} onClick={() => setFields(p => ({ ...p, logic_held: v }))}
+              className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                fields.logic_held === v
+                  ? v === true ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 border-transparent'
+                    : v === false ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border-transparent'
+                    : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 border-transparent'
+                  : 'border-gray-300 dark:border-gray-700 text-gray-500 hover:border-gray-400'
+              }`}
+            >{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* weak_link */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-gray-600 dark:text-gray-300">논리의 어느 연결고리가 약했는가?</label>
+        <textarea value={fields.weak_link} onChange={e => setFields(p => ({ ...p, weak_link: e.target.value }))}
+          placeholder='"[가정 X]가 성립한다면 [결과 Y]가 따라온다"는 연결 중 어떤 부분이 무너졌는가...'
+          rows={3} className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 resize-none focus:outline-none focus:border-violet-500" />
+      </div>
+
+      {/* if_wrong_why / if_right_why */}
+      {fields.logic_held === false && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-gray-600 dark:text-gray-300">어디서 잘못 생각했는가?</label>
+          <textarea value={fields.if_wrong_why} onChange={e => setFields(p => ({ ...p, if_wrong_why: e.target.value }))}
+            placeholder="처음부터 잘못된 가정, 놓친 리스크, 과신한 부분..."
+            rows={3} className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 resize-none focus:outline-none focus:border-violet-500" />
+        </div>
+      )}
+      {fields.logic_held === true && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-gray-600 dark:text-gray-300">이 논리 구조는 반복 가능한가?</label>
+          <textarea value={fields.if_right_why} onChange={e => setFields(p => ({ ...p, if_right_why: e.target.value }))}
+            placeholder="무엇이 맞았는지, 이 투자 프레임을 언제 다시 쓸 수 있는지..."
+            rows={3} className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 resize-none focus:outline-none focus:border-violet-500" />
+        </div>
+      )}
+
+      {/* next_time */}
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-gray-600 dark:text-gray-300">다음에 비슷한 상황에서는?</label>
+        <textarea value={fields.next_time} onChange={e => setFields(p => ({ ...p, next_time: e.target.value }))}
+          placeholder="구체적인 교훈: '다음에는 ~을 확인하겠다', '~이 보이면 재검토하겠다'..."
+          rows={3} className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 resize-none focus:outline-none focus:border-violet-500" />
+      </div>
+
+      {/* 저장 버튼 */}
+      <div className="flex gap-3 justify-end">
+        <button onClick={() => save(true)} disabled={saving}
+          className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 px-4 py-2">
+          임시 저장
+        </button>
+        <button onClick={() => save(false)} disabled={saving}
+          className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs font-medium px-4 py-2 rounded-lg transition-colors">
+          {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} 복기 확정
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export default function JournalPage() {
   const navigate = useNavigate()
@@ -767,6 +1015,14 @@ export default function JournalPage() {
   const [conversationsLoading, setConversationsLoading] = useState(false)
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
 
+  // retrospective state
+  const [closedCycles, setClosedCycles] = useState<InvestmentCycle[]>([])
+  const [openCycles, setOpenCycles] = useState<InvestmentCycle[]>([])
+  const [retroLoading, setRetroLoading] = useState(false)
+  const [retroLoaded, setRetroLoaded] = useState(false)
+  const [retros, setRetros] = useState<Record<string, Retrospective>>({})
+  const [openCycleId, setOpenCycleId] = useState<string | null>(null)
+
   useEffect(() => {
     fetchLogs()
     fetchIdeas()
@@ -775,6 +1031,7 @@ export default function JournalPage() {
 
   useEffect(() => {
     if (tab === 'conversation' && !conversationsLoaded) fetchConversations()
+    if (tab === 'retro' && !retroLoaded) fetchClosedCycles()
   }, [tab])
 
   async function fetchLogs() {
@@ -838,6 +1095,32 @@ export default function JournalPage() {
 
   function handleConversationCreated(item: ConversationImport) {
     setConversations(prev => [item, ...prev])
+  }
+
+  async function fetchClosedCycles() {
+    setRetroLoading(true)
+    try {
+      const [closedRes, openRes] = await Promise.all([
+        fetch('/api/cycles?status=closed'),
+        fetch('/api/cycles?status=open'),
+      ])
+      if (closedRes.ok) {
+        const cycles: InvestmentCycle[] = await closedRes.json()
+        setClosedCycles(cycles)
+        const retroMap: Record<string, Retrospective> = {}
+        await Promise.all(
+          cycles.filter(c => c.has_retrospective).map(async c => {
+            const r = await fetch(`/api/retrospectives/${c.id}`)
+            if (r.ok) retroMap[c.id] = await r.json()
+          })
+        )
+        setRetros(retroMap)
+      }
+      if (openRes.ok) setOpenCycles(await openRes.json())
+    } finally {
+      setRetroLoading(false)
+      setRetroLoaded(true)
+    }
   }
 
   async function handleConversationDeleted(id: string) {
@@ -906,9 +1189,18 @@ export default function JournalPage() {
             >
               <Globe size={12} />
               탐색결과
-              {conversations.length > 0 && (
-                <span className="bg-blue-100 text-blue-700 dark:bg-blue-700 dark:text-blue-200 text-xs px-1.5 py-0 rounded-full leading-5">
-                  {conversations.length}
+            </button>
+            <button
+              onClick={() => setTab('retro')}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
+                tab === 'retro' ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+              }`}
+            >
+              <RefreshCw size={12} />
+              복기
+              {closedCycles.filter(c => !c.has_retrospective || retros[c.id]?.is_draft).length > 0 && (
+                <span className="bg-amber-100 text-amber-700 dark:bg-amber-700 dark:text-amber-200 text-xs px-1.5 py-0 rounded-full leading-5">
+                  {closedCycles.filter(c => !c.has_retrospective || retros[c.id]?.is_draft).length}
                 </span>
               )}
             </button>
@@ -1052,6 +1344,131 @@ export default function JournalPage() {
                 ))}
               </div>
             )}
+          </>
+        )}
+
+        {/* ── 복기 탭 ── */}
+        {tab === 'retro' && (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                청산된 투자의 논리를 돌아봅니다. 처음 핵심 논리 vs 실제를 비교하세요.
+              </p>
+              <button
+                onClick={() => { setRetroLoaded(false); fetchClosedCycles() }}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                title="새로고침"
+              >
+                <RefreshCw size={13} />
+              </button>
+            </div>
+
+            {retroLoading && <p className="text-gray-400 dark:text-gray-500 text-sm text-center py-8">불러오는 중...</p>}
+
+            {/* 진행 중 사이클 */}
+            {!retroLoading && openCycles.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">모니터링 중</p>
+                {openCycles.map(cycle => {
+                  const days = Math.floor((Date.now() - new Date(cycle.opened_at.endsWith('Z') ? cycle.opened_at : cycle.opened_at + 'Z').getTime()) / 86400000)
+                  return (
+                    <div key={cycle.id} className="bg-blue-50 dark:bg-blue-900/15 border border-blue-200 dark:border-blue-800 rounded-xl px-4 py-3 flex items-center gap-3">
+                      <span className="text-sm">📈</span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-semibold text-gray-900 dark:text-white">{cycle.ticker_name ?? cycle.ticker_symbol}</span>
+                        <span className="text-xs text-gray-400 dark:text-gray-500 ml-2 font-mono">{cycle.ticker_symbol}</span>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-xs font-medium text-blue-600 dark:text-blue-400">{days}일째</p>
+                        <p className="text-xs text-gray-400 dark:text-gray-500">{fmtKST(cycle.opened_at, 'date')} 시작</p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {!retroLoading && closedCycles.length === 0 && openCycles.length === 0 && (
+              <div className="text-center py-16 space-y-2">
+                <RefreshCw size={32} className="text-gray-700 mx-auto" />
+                <p className="text-gray-400 dark:text-gray-500 text-sm">아직 투자 사이클이 없습니다.</p>
+                <p className="text-gray-500 dark:text-gray-600 text-xs">KIS 동기화에서 매수/매도 감지 시 자동으로 기록됩니다.</p>
+              </div>
+            )}
+
+            {!retroLoading && closedCycles.length > 0 && (
+              <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">청산 기록</p>
+            )}
+
+            <div className="space-y-3">
+              {closedCycles.map(cycle => {
+                const retro = retros[cycle.id] ?? null
+                const needsRetro = !cycle.has_retrospective || retro?.is_draft
+                const isOpen = openCycleId === cycle.id
+                const pnl = cycle.pnl_pct
+
+                return (
+                  <div key={cycle.id} className={`border rounded-xl overflow-hidden ${
+                    needsRetro ? 'border-amber-400 dark:border-amber-600' : 'border-gray-200 dark:border-gray-800'
+                  }`}>
+                    {/* 카드 헤더 */}
+                    <button
+                      onClick={() => setOpenCycleId(isOpen ? null : cycle.id)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-left ${
+                        needsRetro ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-gray-50 dark:bg-gray-900'
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                            {cycle.ticker_name ?? cycle.ticker_symbol}
+                          </span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{cycle.ticker_symbol}</span>
+                          {cycle.exit_reason && (
+                            <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${EXIT_REASON_COLOR[cycle.exit_reason]}`}>
+                              {EXIT_REASON_LABEL[cycle.exit_reason]}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5">
+                          <span className="text-xs text-gray-400 dark:text-gray-500">
+                            {fmtKST(cycle.opened_at, 'date')} → {cycle.closed_at ? fmtKST(cycle.closed_at, 'date') : '-'}
+                          </span>
+                          {pnl !== null && (
+                            <span className={`text-xs font-semibold ${pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                              {pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {needsRetro
+                          ? <span className="text-xs font-medium text-amber-600 dark:text-amber-400">복기 미완성</span>
+                          : <span className="text-xs text-emerald-600 dark:text-emerald-400">✓ 완성</span>
+                        }
+                        {isOpen ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+                      </div>
+                    </button>
+
+                    {/* 복기 편집기 */}
+                    {isOpen && (
+                      <div className="px-4 py-5 bg-white dark:bg-gray-950">
+                        <RetrospectiveEditor
+                          cycle={cycle}
+                          retro={retro}
+                          onUpdate={(updated) => {
+                            setRetros(prev => ({ ...prev, [cycle.id]: updated }))
+                            setClosedCycles(prev => prev.map(c =>
+                              c.id === cycle.id ? { ...c, has_retrospective: true } : c
+                            ))
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </>
         )}
 
