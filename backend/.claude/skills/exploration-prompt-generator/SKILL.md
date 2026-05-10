@@ -30,7 +30,7 @@ description: 시스템 데이터를 컨텍스트로 포함한 외부 Claude 탐�
 ConversationImport(portfolio_review)로 주요 인사이트를 기록합니다.
 
 ### 3. 반대 논거 탐색 (thesis_challenge)
-특정 종목의 현재 seed_memo 또는 thesis를 컨텍스트로 포함하여, 반대 논거를 집중 탐색합니다.
+특정 종목의 현재 thesis를 컨텍스트로 포함하여, 반대 논거를 집중 탐색합니다.
 
 **포함 내용:**
 - 현재 thesis 요약
@@ -38,7 +38,7 @@ ConversationImport(portfolio_review)로 주요 인사이트를 기록합니다.
 - "이 논리의 어느 부분이 틀릴 수 있는가?" 질문
 
 **탐색 후:**
-강화된 seed_memo로 thesis를 재생성하거나, ConversationImport(thesis_challenge)로 기록합니다.
+ConversationImport(thesis_challenge)로 기록하거나, "Thesis 완성" 프롬프트로 이어서 5개 필드를 갱신합니다.
 
 ### 4. 종목 집중 분석 (deep_analysis)
 특정 종목의 보고서 데이터를 컨텍스트로 포함하여, 투자 관점 수립을 위한 심층 탐색을 합니다.
@@ -49,7 +49,7 @@ ConversationImport(portfolio_review)로 주요 인사이트를 기록합니다.
 - "왜 지금 사고 싶은가?" 초기 관점
 
 **탐색 후:**
-seed_memo + exploration_note를 작성하여 thesis 생성에 활용합니다.
+이 논의를 바탕으로 "Thesis 완성" 프롬프트를 실행하여 5개 필드를 산출합니다.
 
 ## 구현 방식
 

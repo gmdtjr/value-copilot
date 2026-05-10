@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, Sparkles, CheckCircle, AlertTriangle,
-  ChevronDown, ChevronUp, Loader2, FileText, Bell, MessageSquare, RefreshCw,
+  ChevronDown, ChevronUp, Loader2, FileText, Bell, PenLine, RefreshCw,
   Database, BarChart2, ExternalLink, Trash2, Link, GitBranch,
   Globe, Clock, Copy, Check, X, Search,
 } from 'lucide-react'
@@ -29,8 +29,6 @@ const THESIS_SECTIONS = [
 ] as const
 
 type ThesisSectionKey = (typeof THESIS_SECTIONS)[number]['key']
-type AnalyzeState = 'idle' | 'streaming' | 'done' | 'error'
-type RefineState = 'idle' | 'streaming' | 'done' | 'error'
 type ActiveTab = 'thesis' | 'data' | 'reports' | 'versions'
 
 const STOCK_TYPE_OPTIONS = [
@@ -85,15 +83,6 @@ const STOCK_TYPE_LABEL: Record<string, string> = {
   turnaround: 'Turnaround',
   cyclical: 'Cyclical',
   special_situation: 'Special Situation',
-}
-
-const SEED_MEMO_PLACEHOLDER: Record<string, string> = {
-  compounding: '이 종목을 Compounding으로 보는 이유를 작성하세요.\n\n예: 최근 5년간 ROIC가 꾸준히 18~22%를 유지하고 있고, 기업 고객의 계약 갱신율이 95% 이상이다. 경쟁사 대비 전환 비용이 높아서 한번 고객이 되면 떠나기 어려운 구조다...',
-  growth: '이 종목을 Growth로 보는 이유를 작성하세요.\n\n예: 현재 TAM 대비 침투율이 5% 수준이고, 분기 매출 성장률이 가속되고 있다. Gross Margin은 70%대이며 규모가 커질수록 마진이 개선되는 구조가 보인다...',
-  asset_play: '이 종목을 Asset Play로 보는 이유를 작성하세요.\n\n예: 현재 시가총액이 보유 부동산 장부가보다 낮다. 최대주주가 바뀌었고, 비핵심 자산 매각 의지를 최근 IR에서 밝혔다. 청산 시 주당 수령액이 현재가보다 높을 것으로 추정된다...',
-  turnaround: '이 종목을 Turnaround로 보는 이유를 작성하세요.\n\n예: 전임 CEO의 무분별한 M&A로 부채가 쌓였으나, 새 경영진이 자산 매각과 비용 절감을 선언했다. 현금 runway는 18개월이고, 핵심 사업 자체는 흑자다. 구조조정 완료 시 정상화 이익이 현재 EV 대비...',
-  cyclical: '이 종목을 Cyclical로 보는 이유를 작성하세요.\n\n예: 이 업종의 평균 마진은 역대 15%인데 현재 3%에 불과하다. 재고가 줄기 시작했고 설비투자는 2년째 감소 중이다. 부채/EBITDA가 2배 수준으로 사이클 저점을 버틸 수 있다. 정상화 시 이익은 현재의...',
-  special_situation: '이 종목을 Special Situation으로 보는 이유를 작성하세요.\n\n예: A사가 B사 인수를 발표했고 주당 X달러를 제시했다. 현재 주가는 Y달러로 Z% 스프레드가 있다. 규제 리스크가 낮고 양사 이사회가 모두 찬성했다. 완료 예상 시점은 N개월 후...',
 }
 
 // ── TickerPromptButton (Step 3/4 외부 탐색) ───────────────────────────────────
@@ -1037,6 +1026,102 @@ function FinancialDataTab({
   )
 }
 
+// ── VersionCard ───────────────────────────────────────────────────────────────
+
+const VERSION_FIELDS = [
+  { key: 'thesis', label: '투자 논거' },
+  { key: 'risk', label: '리스크' },
+  { key: 'key_assumptions', label: '핵심 가정' },
+  { key: 'valuation', label: '밸류에이션' },
+  { key: 'monitoring_contract', label: 'Monitoring Contract' },
+] as const
+
+function VersionCard({
+  v, isActive, onDelete,
+}: {
+  v: Thesis
+  isActive: boolean
+  onDelete: (id: string) => void
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggle = (key: string) =>
+    setExpanded(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s })
+
+  const statusC: Record<string, string> = {
+    draft: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
+    confirmed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+    needs_review: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
+    retired: 'bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500',
+  }
+  const statusL: Record<string, string> = {
+    draft: 'Draft', confirmed: 'Confirmed', needs_review: '재검토', retired: '아카이브',
+  }
+
+  return (
+    <div className={`bg-gray-50 dark:bg-gray-900 border rounded-xl p-5 space-y-3 ${
+      isActive ? 'border-violet-500 ring-1 ring-violet-500/30' : 'border-gray-200 dark:border-gray-800'
+    }`}>
+      {/* 헤더 */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-sm font-bold text-gray-900 dark:text-white">v{v.version_number}</span>
+        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusC[v.confirmed] ?? ''}`}>
+          {statusL[v.confirmed] ?? v.confirmed}
+        </span>
+        {isActive && (
+          <span className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300 px-1.5 py-0.5 rounded font-medium">현재</span>
+        )}
+        {v.stock_type && (
+          <span className="text-xs text-gray-400 dark:text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">{v.stock_type}</span>
+        )}
+        <span className="ml-auto text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
+          <Clock size={11} />
+          {v.confirmed_at ? fmtKST(v.confirmed_at) : (v.last_analyzed_at ? fmtKST(v.last_analyzed_at) : '-')}
+        </span>
+      </div>
+
+      {/* 필드 목록 */}
+      {VERSION_FIELDS.map(({ key, label }) => {
+        const content = v[key as keyof Thesis] as string | null | undefined
+        if (!content) return null
+        const open = expanded.has(key)
+        return (
+          <div key={key} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggle(key)}
+              className="w-full flex items-center justify-between px-4 py-2.5 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
+            >
+              <span className="text-xs font-medium text-gray-600 dark:text-gray-300">{label}</span>
+              {open ? <ChevronUp size={13} className="text-gray-400" /> : <ChevronDown size={13} className="text-gray-400" />}
+            </button>
+            {open && (
+              <div className="px-4 pb-4 pt-1 border-t border-gray-200 dark:border-gray-700">
+                <p className="text-sm text-gray-700 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">{content}</p>
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {v.retired_at && v.retirement_reason && (
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          아카이브 사유: {v.retirement_reason} · {fmtKST(v.retired_at)}
+        </p>
+      )}
+
+      {!isActive && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => onDelete(v.id)}
+            className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-600 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+          >
+            <Trash2 size={12} /> 버전 삭제
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ThesisPage() {
@@ -1049,14 +1134,18 @@ export default function ThesisPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [analyzeState, setAnalyzeState] = useState<AnalyzeState>('idle')
-  const [analyzeError, setAnalyzeError] = useState('')
-  const [streamText, setStreamText] = useState('')
-  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false)
-  const [modalStockType, setModalStockType] = useState('compounding')
-  const [modalSeedMemo, setModalSeedMemo] = useState('')
-  const [modalExplorationNote, setModalExplorationNote] = useState('')
-  const [modalMonitoringContract, setModalMonitoringContract] = useState('')
+  const [showDirectModal, setShowDirectModal] = useState(false)
+  const [directFields, setDirectFields] = useState({
+    stock_type: 'compounding',
+    thesis: '',
+    risk: '',
+    key_assumptions: '',
+    valuation: '',
+    monitoring_contract: '',
+  })
+  const [directSaving, setDirectSaving] = useState(false)
+  const [directError, setDirectError] = useState('')
+  const [pasteText, setPasteText] = useState('')
 
   // Monitoring Contract confirm flow
   const [showConfirmModal, setShowConfirmModal] = useState(false)
@@ -1088,14 +1177,7 @@ export default function ThesisPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  const [feedback, setFeedback] = useState('')
-  const [refineState, setRefineState] = useState<RefineState>('idle')
-  const [refineError, setRefineError] = useState('')
-  const [refineCount, setRefineCount] = useState(0)
-
   const [activeTab, setActiveTab] = useState<ActiveTab>('thesis')
-
-  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     if (activeTab === 'versions' && !versionsLoaded) loadVersionHistory()
@@ -1160,81 +1242,60 @@ export default function ThesisPage() {
     }
   }
 
-  function openAnalyzeModal() {
-    setModalStockType(thesis?.stock_type ?? 'compounding')
-    setModalSeedMemo('')
-    setModalExplorationNote('')
-    setModalMonitoringContract('')
-    setShowAnalyzeModal(true)
+  function parsePasteText(text: string) {
+    const tags = ['THESIS', 'RISK', 'KEY_ASSUMPTIONS', 'VALUATION', 'MONITORING_CONTRACT'] as const
+    const map: Record<string, string> = {}
+    for (let i = 0; i < tags.length; i++) {
+      const tag = tags[i]
+      const start = text.indexOf(`[${tag}]`)
+      if (start === -1) continue
+      const contentStart = start + tag.length + 2
+      const next = tags.slice(i + 1).map(t => text.indexOf(`[${t}]`)).find(p => p > start) ?? text.length
+      map[tag.toLowerCase()] = text.slice(contentStart, next).trim()
+    }
+    if (Object.keys(map).length > 0) {
+      setDirectFields(f => ({
+        ...f,
+        ...(map['thesis'] && { thesis: map['thesis'] }),
+        ...(map['risk'] && { risk: map['risk'] }),
+        ...(map['key_assumptions'] && { key_assumptions: map['key_assumptions'] }),
+        ...(map['valuation'] && { valuation: map['valuation'] }),
+        ...(map['monitoring_contract'] && { monitoring_contract: map['monitoring_contract'] }),
+      }))
+      setPasteText('')
+    }
   }
 
-  function startAnalyze() {
-    if (!id) return
-    setShowAnalyzeModal(false)
-    setAnalyzeState('streaming')
-    setStreamText('')
-    setAnalyzeError('')
-    setActiveTab('thesis')
-
-    abortRef.current = api.analyzeStream(
-      id,
-      {
-        stock_type: modalStockType,
-        seed_memo: modalSeedMemo,
-        exploration_note: modalExplorationNote || undefined,
-        monitoring_contract: modalMonitoringContract || undefined,
-      },
-      {
-        onStart: () => setStreamText(''),
-        onChunk: (text) => setStreamText((prev) => prev + text),
-        onComplete: async (sections) => {
-          try {
-            const updated = await api.getThesis(id)
-            setThesis(updated)
-            setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
-          } catch {
-            setThesis((prev) => prev
-              ? { ...prev, ...sections, confirmed: 'draft' }
-              : null)
-          }
-          setAnalyzeState('done')
-          setStreamText('')
-        },
-        onError: (msg) => {
-          setAnalyzeError(msg)
-          setAnalyzeState('error')
-        },
-      },
-    )
-  }
-
-  function startRefine() {
-    if (!id || !feedback.trim()) return
-    setRefineState('streaming')
-    setStreamText('')
-    setRefineError('')
-
-    abortRef.current = api.refineStream(id, feedback, {
-      onStart: () => setStreamText(''),
-      onChunk: (text) => setStreamText((prev) => prev + text),
-      onComplete: async (sections) => {
-        try {
-          const updated = await api.getThesis(id)
-          setThesis(updated)
-          setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
-        } catch {
-          setThesis((prev) => prev ? { ...prev, ...sections, confirmed: 'draft' } : null)
-        }
-        setRefineState('done')
-        setStreamText('')
-        setFeedback('')
-        setRefineCount((n) => n + 1)
-      },
-      onError: (msg) => {
-        setRefineError(msg)
-        setRefineState('error')
-      },
+  function openDirectModal() {
+    setDirectFields({
+      stock_type: thesis?.stock_type ?? 'compounding',
+      thesis: thesis?.confirmed !== 'confirmed' ? (thesis?.thesis ?? '') : '',
+      risk: thesis?.confirmed !== 'confirmed' ? (thesis?.risk ?? '') : '',
+      key_assumptions: thesis?.confirmed !== 'confirmed' ? (thesis?.key_assumptions ?? '') : '',
+      valuation: thesis?.confirmed !== 'confirmed' ? (thesis?.valuation ?? '') : '',
+      monitoring_contract: thesis?.confirmed !== 'confirmed' ? (thesis?.monitoring_contract ?? '') : '',
     })
+    setDirectError('')
+    setPasteText('')
+    setShowDirectModal(true)
+  }
+
+  async function handleDirectSave() {
+    if (!id) return
+    setDirectSaving(true)
+    setDirectError('')
+    try {
+      await api.createThesisDirect(id, directFields)
+      const updated = await api.getThesis(id)
+      setThesis(updated)
+      setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
+      setShowDirectModal(false)
+      setActiveTab('thesis')
+    } catch (e) {
+      setDirectError(e instanceof Error ? e.message : '저장 실패')
+    } finally {
+      setDirectSaving(false)
+    }
   }
 
   async function handleBreakMonitor() {
@@ -1345,11 +1406,13 @@ export default function ThesisPage() {
     if (!confirm(msg)) return
     const res = await fetch(`/api/thesis/versions/${thesisId}`, { method: 'DELETE' })
     if (res.ok || res.status === 204) {
-      // 삭제 후 최신 활성 thesis 다시 로드 (없으면 null)
       if (!id) return
-      const updated = await api.getThesis(id).catch(() => null)
+      const [updated, allVersions] = await Promise.all([
+        api.getThesis(id).catch(() => null),
+        api.getThesisVersions(id).catch(() => []),
+      ])
       setThesis(updated)
-      setVersionsLoaded(false)
+      setVersions(allVersions)
     } else {
       const err = await res.json().catch(() => ({ detail: '삭제 실패' }))
       alert(err.detail || '삭제 실패')
@@ -1398,13 +1461,10 @@ export default function ThesisPage() {
       }
       const newVersion: Thesis = await res.json()
       setThesis(newVersion)
-      setFeedback(buildSignalFeedback(signal))
-      setRefineError('')
-      setRefineState('idle')
       setVersionsLoaded(false)
       setActiveTab('thesis')
       setOpenSections(new Set(THESIS_SECTIONS.map((s) => s.key)))
-      setReportMsg('Break Monitor 신호를 반영할 새 draft 버전을 만들었습니다. 피드백을 확인한 뒤 반영하세요.')
+      setReportMsg('Break Monitor 신호를 반영할 새 draft 버전을 만들었습니다. "Thesis 작성" 버튼으로 내용을 수정하세요.')
     } catch (e) {
       alert(e instanceof Error ? e.message : '새 버전 생성 실패')
     }
@@ -1624,14 +1684,10 @@ export default function ThesisPage() {
               }
             </button>
             <button
-              onClick={openAnalyzeModal}
-              disabled={analyzeState === 'streaming'}
-              className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
+              onClick={openDirectModal}
+              className="flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 text-white text-xs sm:text-sm font-medium px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg transition-colors"
             >
-              {analyzeState === 'streaming'
-                ? <Loader2 size={14} className="animate-spin" />
-                : <><Sparkles size={14} /> AI 분석</>
-              }
+              <PenLine size={14} /> Thesis 작성
             </button>
           </div>
         </div>
@@ -1722,28 +1778,8 @@ export default function ThesisPage() {
                 <FileText size={16} /> {reportMsg}
               </div>
             )}
-            {analyzeError && (
-              <div className="bg-red-900/30 border border-red-800 rounded-lg p-4 text-red-700 dark:text-red-300 text-sm flex items-center gap-2">
-                <AlertTriangle size={16} /> {analyzeError}
-              </div>
-            )}
-
-            {/* Streaming indicator */}
-            {(analyzeState === 'streaming' || refineState === 'streaming') && (
-              <div className="bg-gray-50 dark:bg-gray-900 border border-violet-800 rounded-xl p-5">
-                <div className="flex items-center gap-2 text-violet-400 text-sm mb-3">
-                  <Loader2 size={14} className="animate-spin" />
-                  {refineState === 'streaming' ? 'AI가 피드백을 반영하여 thesis를 수정하고 있습니다...' : 'AI가 thesis를 생성하고 있습니다...'}
-                </div>
-                <pre className="text-gray-600 dark:text-gray-300 text-sm whitespace-pre-wrap font-mono leading-relaxed max-h-96 overflow-y-auto">
-                  {streamText}
-                  <span className="animate-pulse">▋</span>
-                </pre>
-              </div>
-            )}
-
-            {/* 외부 탐색 도구 (Step 3: 심층 분석 / Step 4: 반대 논거) */}
-            {id && analyzeState === 'idle' && (
+            {/* 외부 탐색 도구 */}
+            {id && (
               <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <Globe size={14} className="text-blue-400 flex-shrink-0" />
@@ -1760,22 +1796,15 @@ export default function ThesisPage() {
                   />
                   <TickerPromptButton
                     tickerId={id}
-                    promptType="thesis_challenge"
-                    label={<><AlertTriangle size={12} /> 반대 논거 탐색 프롬프트</>}
-                    title={`${ticker?.name ?? ''} 반대 논거 탐색 프롬프트`}
-                    className="bg-red-900/20 border-red-700/50 text-red-600 dark:text-red-300 hover:bg-red-900/40"
-                  />
-                  <TickerPromptButton
-                    tickerId={id}
                     promptType="monitoring_contract"
-                    label={<><Bell size={12} /> Seed Memo + 감시 계약서</>}
-                    title={`${ticker?.name ?? ''} Seed Memo + Monitoring Contract 프롬프트`}
+                    label={<><PenLine size={12} /> Thesis 완성 프롬프트</>}
+                    title={`${ticker?.name ?? ''} 최종 Thesis 완성 (5개 필드 산출)`}
                     className="bg-emerald-900/20 border-emerald-700/50 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-900/40"
                   />
                 </div>
                 {!hasContent && (
                   <p className="mt-3 text-xs text-gray-400 dark:text-gray-500">
-                    보고서를 읽은 후 위 프롬프트로 외부 Claude와 분석 → seed_memo 초안 형성 → "AI 분석"으로 Thesis 작성
+                    심층 분석 프롬프트로 외부 대화 시작 → 논의 완료 후 Thesis 완성 프롬프트로 5개 필드 산출 → "Thesis 작성"으로 입력
                   </p>
                 )}
 
@@ -1793,29 +1822,21 @@ export default function ThesisPage() {
             )}
 
             {/* No content yet */}
-            {analyzeState === 'idle' && !hasContent && (
+            {!hasContent && (
               <div className="text-center py-12 text-gray-500 dark:text-gray-600">
-                <Sparkles size={40} className="mx-auto mb-3 text-gray-800" />
+                <PenLine size={40} className="mx-auto mb-3 text-gray-800" />
                 <p className="text-gray-400 dark:text-gray-500">아직 Thesis가 없습니다.</p>
-                <p className="text-sm mt-1 text-gray-500 dark:text-gray-600">보고서 생성 → 외부 탐색 → "AI 분석" 버튼으로 초안을 작성하세요.</p>
+                <p className="text-sm mt-1 text-gray-500 dark:text-gray-600">외부 Claude에서 분석 완료 후 "Thesis 작성" 버튼으로 결과를 입력하세요.</p>
               </div>
             )}
 
-            {/* stock_type 배지 + seed_memo */}
+            {/* stock_type 배지 */}
             {hasContent && thesis?.stock_type && (
-              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-400 dark:text-gray-500">투자 유형</span>
-                  <span className="px-2.5 py-1 bg-violet-900/50 border border-violet-700 text-violet-600 dark:text-violet-300 text-xs font-medium rounded-full">
-                    {STOCK_TYPE_LABEL[thesis.stock_type] ?? thesis.stock_type}
-                  </span>
-                </div>
-                {thesis.seed_memo && (
-                  <div>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">나의 초기 관점</p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{thesis.seed_memo}</p>
-                  </div>
-                )}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400 dark:text-gray-500">투자 유형</span>
+                <span className="px-2.5 py-1 bg-violet-900/50 border border-violet-700 text-violet-600 dark:text-violet-300 text-xs font-medium rounded-full">
+                  {STOCK_TYPE_LABEL[thesis.stock_type] ?? thesis.stock_type}
+                </span>
               </div>
             )}
 
@@ -1854,55 +1875,6 @@ export default function ThesisPage() {
                   setThesis(updated)
                 }}
               />
-            )}
-
-            {/* exploration_note */}
-            {hasContent && thesis?.exploration_note && (
-              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Globe size={14} className="text-blue-400" />
-                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">외부 탐색 인사이트</span>
-                </div>
-                <p className="text-sm text-gray-700 dark:text-gray-200 whitespace-pre-wrap">{thesis.exploration_note}</p>
-              </div>
-            )}
-
-            {/* Feedback loop */}
-            {hasContent && thesis?.confirmed !== 'confirmed' && analyzeState !== 'streaming' && (
-              <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl p-5 space-y-3">
-                <div className="flex items-center gap-2 text-gray-600 dark:text-gray-300 text-sm font-medium">
-                  <MessageSquare size={15} />
-                  피드백으로 Thesis 수정
-                  {refineCount > 0 && (
-                    <span className="ml-auto text-xs text-gray-400 dark:text-gray-500">{refineCount}회 반영됨</span>
-                  )}
-                </div>
-                <textarea
-                  value={feedback}
-                  onChange={(e) => setFeedback(e.target.value)}
-                  disabled={refineState === 'streaming'}
-                  placeholder="예: 경쟁사 대비 해자(moat) 분석을 더 구체적으로 써줘. 밸류에이션에서 DCF 할인율 가정을 더 보수적으로 조정해줘."
-                  rows={4}
-                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600 disabled:opacity-50"
-                />
-                {refineError && (
-                  <div className="flex items-center gap-2 text-red-600 dark:text-red-400 text-sm">
-                    <AlertTriangle size={14} /> {refineError}
-                  </div>
-                )}
-                <div className="flex justify-end">
-                  <button
-                    onClick={startRefine}
-                    disabled={refineState === 'streaming' || !feedback.trim()}
-                    className="flex items-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-                  >
-                    {refineState === 'streaming'
-                      ? <><Loader2 size={14} className="animate-spin" /> 수정 중...</>
-                      : <><RefreshCw size={14} /> 피드백 반영</>
-                    }
-                  </button>
-                </div>
-              </div>
             )}
 
             {thesis?.last_analyzed_at && (
@@ -1957,74 +1929,14 @@ export default function ThesisPage() {
                 <p>버전 기록이 없습니다.</p>
               </div>
             )}
-            {versions.map((v) => {
-              const isActive = v.id === thesis?.id
-              const statusC: Record<string, string> = {
-                draft: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
-                confirmed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
-                needs_review: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-                retired: 'bg-gray-200 text-gray-500 dark:bg-gray-800 dark:text-gray-500',
-              }
-              const statusL: Record<string, string> = {
-                draft: 'Draft', confirmed: 'Confirmed', needs_review: '재검토', retired: '아카이브',
-              }
-              return (
-                <div
-                  key={v.id}
-                  className={`bg-gray-50 dark:bg-gray-900 border rounded-xl p-5 space-y-3 ${
-                    isActive
-                      ? 'border-violet-500 ring-1 ring-violet-500/30'
-                      : 'border-gray-200 dark:border-gray-800'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="text-sm font-bold text-gray-900 dark:text-white">
-                      v{v.version_number}
-                    </span>
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${statusC[v.confirmed] ?? ''}`}>
-                      {statusL[v.confirmed] ?? v.confirmed}
-                    </span>
-                    {isActive && (
-                      <span className="text-xs bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-300 px-1.5 py-0.5 rounded font-medium">현재</span>
-                    )}
-                    {v.stock_type && (
-                      <span className="text-xs text-gray-400 dark:text-gray-500 bg-gray-200 dark:bg-gray-800 px-1.5 py-0.5 rounded">
-                        {v.stock_type}
-                      </span>
-                    )}
-                    <span className="ml-auto text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
-                      <Clock size={11} />
-                      {v.confirmed_at ? fmtKST(v.confirmed_at) : (v.last_analyzed_at ? fmtKST(v.last_analyzed_at) : '-')}
-                    </span>
-                  </div>
-                  {v.monitoring_contract && (
-                    <div className="border-l-2 border-emerald-500 pl-3">
-                      <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400 mb-1 flex items-center gap-1">
-                        <Bell size={11} /> Monitoring Contract
-                      </p>
-                      <p className="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{v.monitoring_contract}</p>
-                    </div>
-                  )}
-                  {v.retired_at && v.retirement_reason && (
-                    <p className="text-xs text-gray-400 dark:text-gray-500">
-                      아카이브 사유: {v.retirement_reason} · {fmtKST(v.retired_at)}
-                    </p>
-                  )}
-                  {/* 버전 삭제 — 현재 활성 버전이 아닌 경우에만 */}
-                  {!isActive && (
-                    <div className="flex justify-end">
-                      <button
-                        onClick={() => handleDeleteThesisVersion(v.id)}
-                        className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-600 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                        title="이 버전 삭제"
-                      >
-                        <Trash2 size={12} /> 버전 삭제
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+            {versions.map((v) => (
+              <VersionCard
+                key={v.id}
+                v={v}
+                isActive={v.id === thesis?.id}
+                onDelete={handleDeleteThesisVersion}
+              />
+            ))}
           </div>
         )}
       </main>
@@ -2113,118 +2025,127 @@ export default function ThesisPage() {
         </div>
       )}
 
-      {/* AI 분석 모달 */}
-      {showAnalyzeModal && (
+      {/* 직접 입력 모달 */}
+      {showDirectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
-          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-lg p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+          <div className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-2xl w-full max-w-2xl p-6 space-y-5 max-h-[90vh] overflow-y-auto">
             <div>
               <h2 className="text-gray-900 dark:text-white font-semibold text-lg flex items-center gap-2">
-                <Sparkles size={18} className="text-violet-400" /> AI 분석 — 관점 설정
+                <PenLine size={18} className="text-violet-400" /> Thesis 직접 입력
               </h2>
               <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-                나의 관점을 먼저 설정하면 AI가 그 방향으로 thesis 초안을 작성합니다.
+                외부 Claude 분석 결과를 그대로 붙여넣으세요.
               </p>
             </div>
 
+            {/* 일괄 붙여넣기 */}
+            <div className="space-y-2">
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium flex items-center gap-1.5">
+                <Copy size={13} className="text-violet-400" /> 전체 붙여넣기
+                <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">— [THESIS] [RISK] ... 형식 자동 파싱</span>
+              </label>
+              <div className="flex gap-2">
+                <textarea
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  placeholder={'외부 Claude 결과 전체를 여기에 붙여넣고 "채우기" 클릭\n\n[THESIS]\n...\n[RISK]\n...\n[KEY_ASSUMPTIONS]\n...\n[VALUATION]\n...\n[MONITORING_CONTRACT]\n...'}
+                  rows={4}
+                  className="flex-1 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600 font-mono"
+                />
+                <button
+                  onClick={() => parsePasteText(pasteText)}
+                  disabled={!pasteText.trim()}
+                  className="self-end flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-3 py-2 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  <Check size={14} /> 채우기
+                </button>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-200 dark:border-gray-700" />
+
+            {/* 투자 유형 */}
             <div className="space-y-2">
               <label className="text-sm text-gray-600 dark:text-gray-300 font-medium">투자 유형 (Stock Type)</label>
-              <p className="text-xs text-gray-400 dark:text-gray-500">보고서에서 본 패턴과 맞는 유형을 고르세요.</p>
-              <div className="grid grid-cols-1 gap-1.5 max-h-72 overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                 {STOCK_TYPE_OPTIONS.map((opt) => {
-                  const selected = modalStockType === opt.value
+                  const selected = directFields.stock_type === opt.value
                   return (
                     <button
                       key={opt.value}
-                      onClick={() => setModalStockType(opt.value)}
-                      className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                      onClick={() => setDirectFields((f) => ({ ...f, stock_type: opt.value }))}
+                      className={`text-left px-3 py-2 rounded-lg border transition-colors ${
                         selected
                           ? 'bg-violet-900/40 border-violet-600'
                           : 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 hover:border-gray-500'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <span className={`font-semibold text-sm ${selected ? 'text-violet-700 dark:text-violet-200' : 'text-gray-900 dark:text-white'}`}>
-                            {opt.label}
-                          </span>
-                          <span className="text-xs text-gray-400 dark:text-gray-500">{opt.desc}</span>
-                        </div>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          selected ? 'bg-violet-100 text-violet-600 dark:bg-violet-800 dark:text-violet-300' : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
-                        }`}>
-                          {opt.valuation}
-                        </span>
+                      <div className={`font-semibold text-sm ${selected ? 'text-violet-700 dark:text-violet-200' : 'text-gray-900 dark:text-white'}`}>
+                        {opt.label}
                       </div>
-                      <div className="flex flex-wrap gap-1">
-                        {opt.signals.map((s) => (
-                          <span key={s} className={`text-xs px-1.5 py-0.5 rounded ${
-                            selected ? 'bg-violet-100 text-violet-600 dark:bg-violet-900/60 dark:text-violet-300' : 'bg-gray-200 dark:bg-gray-700/60 text-gray-500 dark:text-gray-400'
-                          }`}>
-                            {s}
-                          </span>
-                        ))}
-                      </div>
+                      <div className="text-xs text-gray-400 dark:text-gray-500">{opt.desc}</div>
                     </button>
                   )
                 })}
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium">
-                나의 초기 관점 <span className="text-red-600 dark:text-red-400">*</span>
+            {/* 6개 필드 */}
+            {([
+              { key: 'thesis', label: '투자 논거 (Thesis)', rows: 6, placeholder: '이 종목에 투자하는 핵심 논거를 서술하세요...' },
+              { key: 'risk', label: '리스크 (Risk)', rows: 4, placeholder: '주요 리스크와 thesis가 틀릴 수 있는 시나리오...' },
+              { key: 'key_assumptions', label: '핵심 가정 (Key Assumptions)', rows: 4, placeholder: '이 thesis가 성립하기 위한 측정 가능한 핵심 가정들...' },
+              { key: 'valuation', label: '밸류에이션 (Valuation)', rows: 3, placeholder: '현재 가격이 내포하는 기대치와 Fair Value 추정...' },
+            ] as const).map(({ key, label, rows, placeholder }) => (
+              <div key={key} className="space-y-1.5">
+                <label className="text-sm text-gray-600 dark:text-gray-300 font-medium">{label}</label>
+                <textarea
+                  value={directFields[key]}
+                  onChange={(e) => setDirectFields((f) => ({ ...f, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  rows={rows}
+                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
+                />
+              </div>
+            ))}
+
+            <div className="space-y-1.5">
+              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium flex items-center gap-1.5">
+                <Bell size={14} className="text-emerald-400" /> Monitoring Contract
+                <span className="text-xs text-gray-400 dark:text-gray-500 font-normal">(Break Monitor 기준)</span>
               </label>
               <textarea
-                value={modalSeedMemo}
-                onChange={(e) => setModalSeedMemo(e.target.value)}
-                placeholder={SEED_MEMO_PLACEHOLDER[modalStockType] ?? `이 종목을 ${STOCK_TYPE_LABEL[modalStockType]} 관점으로 보는 이유를 작성하세요.`}
-                rows={5}
-                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-violet-600"
+                value={directFields.monitoring_contract}
+                onChange={(e) => setDirectFields((f) => ({ ...f, monitoring_contract: e.target.value }))}
+                placeholder={'## Core Logic\n...\n\n## Break Conditions\n- ...\n\n## Strengthening Signals\n- ...\n\n## Watch Metrics\n- ...'}
+                rows={8}
+                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-emerald-600 font-mono"
               />
-              <p className="text-xs text-gray-400 dark:text-gray-500">AI는 이 관점을 기반으로 thesis를 작성합니다. 구체적일수록 결과물이 좋아집니다.</p>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium flex items-center gap-1.5">
-                <Globe size={14} className="text-blue-400" /> 외부 탐색 인사이트 <span className="text-gray-400 dark:text-gray-500 font-normal">(선택)</span>
-              </label>
-              <textarea
-                value={modalExplorationNote}
-                onChange={(e) => setModalExplorationNote(e.target.value)}
-                placeholder="외부 Claude와의 탐색 결과 중 이 종목에 대한 핵심 인사이트를 붙여넣으세요..."
-                rows={3}
-                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-400 dark:text-gray-500">Journal의 "탐색결과"에서 가져온 인사이트나 보고서에서 건진 관점을 여기에 입력하면 thesis에 반영됩니다.</p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm text-gray-600 dark:text-gray-300 font-medium flex items-center gap-1.5">
-                <Bell size={14} className="text-emerald-400" /> Monitoring Contract <span className="text-gray-400 dark:text-gray-500 font-normal">(선택)</span>
-              </label>
-              <textarea
-                value={modalMonitoringContract}
-                onChange={(e) => setModalMonitoringContract(e.target.value)}
-                placeholder={'외부 Claude의 "Seed Memo + 감시 계약서" 프롬프트에서 나온 Monitoring Contract를 붙여넣으세요.\n\n## Core Logic\n...\n\n## Break Conditions\n- ...\n\n## Strengthening Signals\n- ...\n\n## Watch Metrics\n- ...'}
-                rows={5}
-                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-700 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-600 resize-none focus:outline-none focus:border-emerald-500"
-              />
-              <p className="text-xs text-gray-400 dark:text-gray-500">입력하면 앱 AI는 이 계약서를 보존·정리하고, Break Monitor는 이 내용을 기준으로 감시합니다.</p>
-            </div>
+            {directError && (
+              <div className="flex items-center gap-2 text-red-600 dark:text-red-400 text-sm">
+                <AlertTriangle size={14} /> {directError}
+              </div>
+            )}
 
             <div className="flex gap-3 justify-end pt-1">
               <button
-                onClick={() => setShowAnalyzeModal(false)}
-                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-200 transition-colors"
+                onClick={() => setShowDirectModal(false)}
+                disabled={directSaving}
+                className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-200 transition-colors disabled:opacity-50"
               >
                 취소
               </button>
               <button
-                onClick={startAnalyze}
-                disabled={!modalSeedMemo.trim()}
-                className="flex items-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
+                onClick={handleDirectSave}
+                disabled={directSaving}
+                className="flex items-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors"
               >
-                <Sparkles size={14} /> 분석 시작
+                {directSaving
+                  ? <><Loader2 size={14} className="animate-spin" /> 저장 중...</>
+                  : <><PenLine size={14} /> 저장</>
+                }
               </button>
             </div>
           </div>

@@ -128,7 +128,7 @@ class Thesis(Base):
     version_number = Column(Integer, default=1, nullable=False)
     parent_version_id = Column(UUID(as_uuid=True), nullable=True)
 
-    confirmed = Column(SAEnum(ThesisStatusEnum, name="thesisstatusenum"), default=ThesisStatusEnum.DRAFT, nullable=False)
+    confirmed = Column(_pg_enum(ThesisStatusEnum, name="thesisstatusenum"), default=ThesisStatusEnum.DRAFT, nullable=False)
     confirmed_at = Column(DateTime, nullable=True)
     thesis = Column(Text, nullable=True)
     risk = Column(Text, nullable=True)

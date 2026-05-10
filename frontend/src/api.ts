@@ -98,128 +98,26 @@ export const api = {
     if (!res.ok) throw new Error(await res.text())
   },
 
-  /**
-   * SSE 스트림으로 피드백 기반 Thesis 재생성.
-   */
-  refineStream(
+  async createThesisDirect(
     tickerId: string,
-    feedback: string,
-    callbacks: {
-      onStart?: (symbol: string) => void
-      onChunk: (text: string) => void
-      onComplete: (sections: Record<string, string>) => void
-      onError: (msg: string) => void
+    data: {
+      stock_type: string
+      thesis?: string
+      risk?: string
+      key_assumptions?: string
+      valuation?: string
+      key_logic?: string
+      monitoring_contract?: string
     },
-  ): AbortController {
-    const controller = new AbortController()
-
-    fetch(`${BASE}/tickers/${tickerId}/refine`, {
+  ): Promise<void> {
+    const res = await fetch(`${BASE}/tickers/${tickerId}/thesis/direct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ feedback }),
-      signal: controller.signal,
+      body: JSON.stringify(data),
     })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: res.statusText }))
-          callbacks.onError(err.detail || `HTTP ${res.status}`)
-          return
-        }
-        const reader = res.body!.getReader()
-        const decoder = new TextDecoder()
-        let buf = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buf += decoder.decode(value, { stream: true })
-
-          const events = buf.split('\n\n')
-          buf = events.pop() ?? ''
-
-          for (const evt of events) {
-            const line = evt.trim()
-            if (!line.startsWith('data:')) continue
-            try {
-              const payload = JSON.parse(line.slice(5).trim())
-              if (payload.type === 'start') callbacks.onStart?.(payload.symbol)
-              else if (payload.type === 'chunk') callbacks.onChunk(payload.text)
-              else if (payload.type === 'complete') callbacks.onComplete(payload.sections)
-              else if (payload.type === 'error') callbacks.onError(payload.message)
-            } catch {
-              // skip malformed
-            }
-          }
-        }
-      })
-      .catch((e) => {
-        if (e.name !== 'AbortError') callbacks.onError(String(e))
-      })
-
-    return controller
-  },
-
-  /**
-   * SSE 스트림으로 Thesis 생성.
-   * onChunk: 실시간 텍스트 청크
-   * onComplete: 완성된 thesis 섹션들
-   * Returns AbortController to cancel.
-   */
-  analyzeStream(
-    tickerId: string,
-    body: { stock_type: string; seed_memo: string; exploration_note?: string; monitoring_contract?: string },
-    callbacks: {
-      onStart?: (symbol: string) => void
-      onChunk: (text: string) => void
-      onComplete: (sections: Record<string, string>) => void
-      onError: (msg: string) => void
-    },
-  ): AbortController {
-    const controller = new AbortController()
-
-    fetch(`${BASE}/tickers/${tickerId}/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: res.statusText }))
-          callbacks.onError(err.detail || `HTTP ${res.status}`)
-          return
-        }
-        const reader = res.body!.getReader()
-        const decoder = new TextDecoder()
-        let buf = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buf += decoder.decode(value, { stream: true })
-
-          const events = buf.split('\n\n')
-          buf = events.pop() ?? ''
-
-          for (const evt of events) {
-            const line = evt.trim()
-            if (!line.startsWith('data:')) continue
-            try {
-              const payload = JSON.parse(line.slice(5).trim())
-              if (payload.type === 'start') callbacks.onStart?.(payload.symbol)
-              else if (payload.type === 'chunk') callbacks.onChunk(payload.text)
-              else if (payload.type === 'complete') callbacks.onComplete(payload.sections)
-              else if (payload.type === 'error') callbacks.onError(payload.message)
-            } catch {
-              // skip malformed
-            }
-          }
-        }
-      })
-      .catch((e) => {
-        if (e.name !== 'AbortError') callbacks.onError(String(e))
-      })
-
-    return controller
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
   },
 }

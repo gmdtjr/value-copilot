@@ -19,7 +19,7 @@ def _active_thesis(db: Session, ticker_id) -> Optional[Thesis]:
         return (
             db.query(Thesis)
             .filter(Thesis.ticker_id == ticker_id, Thesis.confirmed != ThesisStatusEnum.RETIRED)
-            .order_by(Thesis.version_number.desc())
+            .order_by(Thesis.version_number.desc().nullslast())
             .first()
         )
     except Exception:
@@ -78,7 +78,7 @@ def get_thesis_versions(ticker_id: str, db: Session = Depends(get_db)):
     versions = (
         db.query(Thesis)
         .filter(Thesis.ticker_id == ticker_id)
-        .order_by(Thesis.version_number.desc())
+        .order_by(Thesis.version_number.desc().nullslast())
         .all()
     )
     return [_to_response(v) for v in versions]
@@ -107,7 +107,7 @@ def confirm_thesis(ticker_id: str, body: ConfirmBody = ConfirmBody(), db: Sessio
     if not thesis:
         raise HTTPException(status_code=404, detail="Thesis not found")
     if not thesis.thesis:
-        raise HTTPException(status_code=400, detail="Thesis 내용이 없습니다. 먼저 AI 분석을 실행하세요.")
+        raise HTTPException(status_code=400, detail="Thesis 내용이 없습니다. 'Thesis 작성' 버튼으로 내용을 입력하세요.")
 
     # Monitoring Contract가 새 framework의 confirm 기준이다.
     # key_logic은 기존 confirmed thesis 호환용 fallback으로만 유지한다.
@@ -219,9 +219,20 @@ def delete_thesis_version(thesis_id: str, db: Session = Depends(get_db)):
                 detail="현재 유일한 confirmed thesis는 삭제할 수 없습니다. 새 버전을 만들어 Confirm한 후 삭제하거나, 종목 삭제를 사용하세요."
             )
 
-    db.delete(thesis)
-    db.commit()
-    logger.info("Thesis version deleted: thesis_id=%s", thesis_id)
+    # FK 제약이 DB 레벨에 미적용됐을 가능성 — 명시적 선행 처리
+    try:
+        from models.db import BreakSignal, InvestmentCycle
+        db.query(BreakSignal).filter(BreakSignal.thesis_id == thesis.id).delete(synchronize_session=False)
+        db.query(InvestmentCycle).filter(InvestmentCycle.thesis_id == thesis.id).update(
+            {"thesis_id": None}, synchronize_session=False
+        )
+        db.delete(thesis)
+        db.commit()
+        logger.info("Thesis version deleted: thesis_id=%s", thesis_id)
+    except Exception as e:
+        db.rollback()
+        logger.exception("Thesis version delete failed: %s", thesis_id)
+        raise HTTPException(status_code=500, detail=f"삭제 실패: {str(e)}")
 
 
 def _to_response(thesis: Thesis) -> ThesisResponse:

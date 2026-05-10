@@ -88,7 +88,7 @@ async def startup():
                 ))
             except Exception:
                 pass
-        # Phase 2: thesisstatusenum 에 retired 추가
+        # Phase 2: thesisstatusenum 에 retired 추가 (소문자 — _pg_enum values 기준)
         try:
             _ac.execute(_text(
                 "ALTER TYPE thesisstatusenum ADD VALUE IF NOT EXISTS 'retired';"
@@ -172,8 +172,10 @@ async def startup():
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS monitoring_contract TEXT;"))
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS retired_at TIMESTAMP;"))
         conn.execute(_text("ALTER TABLE theses ADD COLUMN IF NOT EXISTS retirement_reason VARCHAR(50);"))
-        # Phase 2: 기존 thesis에 version_number=1 백필
+        # Phase 2: 기존 thesis에 version_number=1 백필 (커밋 분리 — 앞 DDL 실패와 무관하게 실행)
+        conn.commit()
         conn.execute(_text("UPDATE theses SET version_number = 1 WHERE version_number IS NULL OR version_number = 0;"))
+        conn.commit()
         # Phase 4: investment_cycles 테이블
         conn.execute(_text("""
             CREATE TABLE IF NOT EXISTS investment_cycles (

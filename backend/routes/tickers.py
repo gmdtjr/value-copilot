@@ -110,6 +110,16 @@ class RefineBody(BaseModel):
     feedback: str
 
 
+class DirectThesisBody(BaseModel):
+    stock_type: str
+    thesis: Optional[str] = None
+    risk: Optional[str] = None
+    key_assumptions: Optional[str] = None
+    valuation: Optional[str] = None
+    key_logic: Optional[str] = None
+    monitoring_contract: Optional[str] = None
+
+
 class BulkRefreshBody(BaseModel):
     ticker_ids: list[str]
 
@@ -253,7 +263,7 @@ def trigger_break_monitor(ticker_id: str, background_tasks: BackgroundTasks, db:
     thesis = (
         db.query(Thesis)
         .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed == ThesisStatusEnum.CONFIRMED)
-        .order_by(Thesis.version_number.desc())
+        .order_by(Thesis.version_number.desc().nullslast())
         .first()
     )
     if not thesis:
@@ -341,7 +351,7 @@ def analyze_ticker(ticker_id: str, body: AnalyzeBody, db: Session = Depends(get_
         active = (
             db.query(Thesis)
             .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed != ThesisStatusEnum.RETIRED)
-            .order_by(Thesis.version_number.desc())
+            .order_by(Thesis.version_number.desc().nullslast())
             .first()
         )
     except Exception:
@@ -453,7 +463,7 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
         thesis = (
             db.query(Thesis)
             .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed != ThesisStatusEnum.RETIRED)
-            .order_by(Thesis.version_number.desc())
+            .order_by(Thesis.version_number.desc().nullslast())
             .first()
         )
     except Exception:
@@ -530,6 +540,80 @@ def refine_ticker(ticker_id: str, body: RefineBody, db: Session = Depends(get_db
     )
 
 
+@router.post("/{ticker_id}/thesis/direct")
+def create_thesis_direct(ticker_id: str, body: DirectThesisBody, db: Session = Depends(get_db)):
+    """직접 입력으로 Thesis draft 생성/수정. AI 호출 없음."""
+    ticker = db.query(Ticker).filter(Ticker.id == ticker_id).first()
+    if not ticker:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    try:
+        active = (
+            db.query(Thesis)
+            .filter(Thesis.ticker_id == ticker.id, Thesis.confirmed != ThesisStatusEnum.RETIRED)
+            .order_by(Thesis.version_number.desc().nullslast())
+            .first()
+        )
+    except Exception:
+        db.rollback()
+        active = db.query(Thesis).filter(Thesis.ticker_id == ticker.id).first()
+
+    is_new_version = False
+    if active and active.confirmed == ThesisStatusEnum.CONFIRMED:
+        new_v = (active.version_number or 1) + 1
+        target = Thesis(
+            ticker_id=ticker.id,
+            version_number=new_v,
+            parent_version_id=active.id,
+            confirmed=ThesisStatusEnum.DRAFT,
+            stock_type=body.stock_type,
+            thesis=body.thesis,
+            risk=body.risk,
+            key_assumptions=body.key_assumptions,
+            valuation=body.valuation,
+            key_logic=body.key_logic,
+            monitoring_contract=body.monitoring_contract,
+            last_analyzed_at=datetime.utcnow(),
+        )
+        db.add(target)
+        is_new_version = True
+    elif active:
+        active.stock_type = body.stock_type
+        active.thesis = body.thesis
+        active.risk = body.risk
+        active.key_assumptions = body.key_assumptions
+        active.valuation = body.valuation
+        active.key_logic = body.key_logic
+        active.monitoring_contract = body.monitoring_contract
+        active.last_analyzed_at = datetime.utcnow()
+        target = active
+    else:
+        target = Thesis(
+            ticker_id=ticker.id,
+            version_number=1,
+            confirmed=ThesisStatusEnum.DRAFT,
+            stock_type=body.stock_type,
+            thesis=body.thesis,
+            risk=body.risk,
+            key_assumptions=body.key_assumptions,
+            valuation=body.valuation,
+            key_logic=body.key_logic,
+            monitoring_contract=body.monitoring_contract,
+            last_analyzed_at=datetime.utcnow(),
+        )
+        db.add(target)
+        is_new_version = True
+
+    db.commit()
+    db.refresh(target)
+
+    if is_new_version and active:
+        notify_thesis_needs_review(ticker.symbol, ticker.name, ticker.market.value, ticker_id=ticker_id)
+
+    logger.info("Thesis directly entered for %s (v%s)", ticker.symbol, target.version_number)
+    return {"ok": True}
+
+
 @router.get("/{ticker_id}/explore-prompt")
 def get_ticker_explore_prompt(
     ticker_id: str,
@@ -548,10 +632,8 @@ def get_ticker_explore_prompt(
 
         if type == "deep_analysis":
             prompt = _build_deep_analysis_prompt(db, ticker, thesis)
-        elif type == "thesis_challenge":
-            prompt = _build_thesis_challenge_prompt(db, ticker, thesis)
         elif type == "monitoring_contract":
-            prompt = _build_monitoring_contract_prompt(db, ticker, thesis)
+            prompt = _build_thesis_complete_prompt(db, ticker, thesis)
         elif type == "thesis_revision":
             prompt = _build_thesis_revision_prompt(db, ticker, thesis, signal_id)
         else:
@@ -626,8 +708,9 @@ def _build_deep_analysis_prompt(db, ticker, thesis) -> str:
         "3. **지금 이 주가에 내포된 기대치는 무엇인가?**",
         "   - 시장이 무엇을 pricing 하고 있는가?",
         "",
-        "4. **내가 이 종목을 매수한다면, 핵심 thesis 한 단락을 작성한다면?**",
-        "   - seed_memo 초안을 써줘 (compounding/growth/asset_play/turnaround/cyclical/special_situation 중 하나로)",
+        "4. **투자 유형과 핵심 논거 방향**",
+        "   - compounding/growth/asset_play/turnaround/cyclical/special_situation 중 어떤 프레임이 맞는가?",
+        "   - 그 관점에서 핵심 투자 논거 한 단락을 제시해줘",
         "",
         "분석 후 내가 직접 투자 thesis를 작성할 수 있도록 방향을 제시해주세요. 매수/매도 추천은 하지 마세요.",
     ])
@@ -635,154 +718,68 @@ def _build_deep_analysis_prompt(db, ticker, thesis) -> str:
     return "\n".join(lines)
 
 
-def _build_thesis_challenge_prompt(db, ticker, thesis) -> str:
-    """Step 4: 현재 논리의 반대 논거를 집중 탐색하는 프롬프트."""
+
+def _build_thesis_complete_prompt(db, ticker, thesis) -> str:
+    """외부 Claude 대화의 마지막 단계: 5개 필드 완성형 Thesis 산출."""
 
     lines = [
-        f"# {ticker.name} ({ticker.symbol}) 반대 논거 탐색",
+        f"# {ticker.name} ({ticker.symbol}) 최종 Thesis 완성",
         "",
-        "당신은 악마의 대변인(devil's advocate) 역할을 해주세요.",
-        "아래 나의 투자 논리에서 약점과 반대 논거를 철저히 찾아주세요.",
+        "지금까지 이 대화에서 나눈 종목 분석, 반대 논거, 추가 리서치 내용을 아래 5개 섹션으로 정리해주세요.",
+        "이 결과는 value-copilot 앱의 'Thesis 작성' 모달에 각 필드에 직접 붙여넣을 것입니다.",
+        "",
+        "원칙:",
+        "- 새로운 추천을 만들지 말고 지금까지 대화에서 형성된 논리를 구조화하세요.",
+        "- 주가 등락, 목표가, 애널리스트 의견은 논거로 쓰지 마세요.",
+        "- Monitoring Contract는 Break Monitor가 그대로 사용합니다. 측정 가능한 조건으로 쓰세요.",
         "",
         f"## 종목 정보",
         f"- 이름: {ticker.name} ({ticker.symbol}, {ticker.market.value})",
         "",
     ]
 
-    if thesis:
-        if thesis.seed_memo:
-            lines.extend([
-                "## 나의 초기 관점 (seed_memo)",
-                thesis.seed_memo,
-                "",
-            ])
-        if thesis.thesis:
-            lines.extend([
-                "## 현재 thesis 초안",
-                thesis.thesis[:600] + ("..." if len(thesis.thesis) > 600 else ""),
-                "",
-            ])
-        monitoring_contract = getattr(thesis, 'monitoring_contract', None)
-        if monitoring_contract:
-            lines.extend([
-                "## 내가 확정한 Monitoring Contract",
-                monitoring_contract,
-                "",
-            ])
-        if thesis.risk:
-            lines.extend([
-                "## 이미 인식하고 있는 리스크",
-                thesis.risk[:400],
-                "",
-            ])
-    else:
-        lines.extend([
-            "*(thesis 미작성 — 아래 종목에 대한 일반적 투자 논리의 약점을 찾아주세요)*",
-            "",
-        ])
-
-    lines.extend([
-        "## 반대 논거 탐색 요청",
-        "",
-        "1. **내 논리의 핵심 가정 중 틀릴 수 있는 것 3가지**",
-        "   - 각각의 확률과 임팩트를 평가해줘",
-        "",
-        "2. **이 투자 thesis를 무너뜨릴 수 있는 시나리오**",
-        "   - 산업 구조 변화? 경쟁사? 거시 환경?",
-        "",
-        "3. **내가 놓치고 있을 수 있는 리스크**",
-        "   - 회계/거버넌스 이슈, 기술 대체, 규제 리스크 등",
-        "",
-        "4. **thesis를 강화하려면 무엇을 더 확인해야 하는가?**",
-        "",
-        "반박을 통해 논리를 강화하는 것이 목적입니다. 투자 추천은 하지 마세요.",
-    ])
-
-    return "\n".join(lines)
-
-
-def _build_monitoring_contract_prompt(db, ticker, thesis) -> str:
-    """외부 Claude 대화의 마지막 단계: Seed Memo + Monitoring Contract 산출."""
-
-    lines = [
-        f"# {ticker.name} ({ticker.symbol}) 최종 Seed Memo + Monitoring Contract",
-        "",
-        "지금까지 이 대화에서 나눈 종목 분석, 반대 논거, 추가 리서치 내용을 하나의 최종 산출물로 압축해주세요.",
-        "목적은 value-copilot 앱에 붙여넣어 AI 분석과 Break Monitor의 기준으로 사용하는 것입니다.",
-        "",
-        "중요 원칙:",
-        "- 새로운 투자 추천을 하지 말고, 지금까지 대화에서 형성된 내 논리를 구조화하세요.",
-        "- 주가 등락, 목표가, 애널리스트 의견은 Core Logic에서 제외하세요.",
-        "- Monitoring Contract는 나중에 Break Monitor가 그대로 사용할 수 있게 측정 가능한 조건으로 쓰세요.",
-        "- 모호한 표현보다 수치, 일정, 사건, 공시 항목을 우선하세요.",
-        "",
-        f"## 종목 정보",
-        f"- 이름: {ticker.name}",
-        f"- 심볼: {ticker.symbol}",
-        f"- 시장: {ticker.market.value}",
-        "",
-    ]
-
-    if thesis:
-        if thesis.seed_memo:
-            lines.extend(["## 현재 seed_memo 초안", thesis.seed_memo, ""])
-        if thesis.thesis:
-            lines.extend(["## 현재 thesis 초안", thesis.thesis[:1000] + ("..." if len(thesis.thesis) > 1000 else ""), ""])
-        if thesis.risk:
-            lines.extend(["## 현재 risk 초안", thesis.risk[:1000] + ("..." if len(thesis.risk) > 1000 else ""), ""])
-        monitoring_contract = getattr(thesis, 'monitoring_contract', None)
-        if monitoring_contract:
-            lines.extend(["## 현재 Monitoring Contract", monitoring_contract, ""])
-
     lines.extend([
         "## 출력 형식",
         "",
-        "아래 두 블록만 출력하세요.",
+        "아래 5개 섹션만, 헤더 그대로 출력하세요.",
         "",
-        "```markdown",
-        "# Seed Memo",
+        "---",
         "",
-        "## One-liner",
-        "> ...",
+        "### [THESIS]",
+        "이 종목에 투자하는 핵심 논거. 왜 지금 이 기업이 저평가됐거나 성장할 것인가.",
+        "비즈니스 모델, 경쟁 우위, 성장 동력 중심으로. 3~5문단.",
         "",
-        "## Why Interesting Now",
-        "...",
+        "### [RISK]",
+        "thesis가 틀릴 수 있는 주요 시나리오.",
+        "각 리스크의 발생 가능성과 thesis에 미치는 임팩트를 간략히 포함. 3~6항목.",
         "",
-        "## Business / Asset Layers",
-        "...",
+        "### [KEY_ASSUMPTIONS]",
+        "thesis가 성립하기 위해 반드시 유지되어야 할 측정 가능한 가정.",
+        "수치, 일정, 사건 기반으로. 예: 'FCF margin 15% 이상 유지', '2026년 내 흑자 전환'",
+        "5~8항목.",
         "",
-        "## Core Thesis",
-        "...",
+        "### [VALUATION]",
+        "현재 가격에 내포된 시장의 기대치와 내 추정 Fair Value.",
+        "Reverse DCF 관점 — '현재 멀티플이 어떤 성장률을 가정하는가, 그게 현실적인가'.",
+        "2~3문단.",
         "",
-        "## Bear Case",
-        "...",
-        "",
-        "## Thesis Break Conditions",
-        "- ...",
-        "",
-        "## Monitoring Metrics",
-        "- ...",
-        "",
-        "# Monitoring Contract",
-        "",
+        "### [MONITORING_CONTRACT]",
         "## Core Logic",
-        "이 thesis가 성립하려면 반드시 유지되어야 하는 Core Logic을 1~2문단으로 작성.",
+        "이 thesis가 성립하려면 반드시 유지되어야 하는 핵심 전제. 1~2문단.",
         "",
         "## Break Conditions",
-        "- 측정 가능한 파기 조건 3~7개",
+        "- 측정 가능한 파기 조건 3~7개 (이 중 하나라도 깨지면 즉시 재검토)",
         "",
         "## Strengthening Signals",
-        "- thesis가 강화되어 추가 리서치/추가 검토를 유도할 수 있는 조건 3~7개",
-        "- 자동 매수/매도 표현은 금지",
+        "- thesis 강화 신호 3~5개 (자동 매수/매도 표현 금지)",
         "",
         "## Watch Metrics",
-        "- Break Monitor가 추적할 지표/뉴스/공시 항목 5~10개",
+        "- Break Monitor가 추적할 지표/뉴스/공시 5~10개",
         "",
-        "## Grace Period / Review Timing",
-        "- 어떤 항목은 즉시 재검토인지, 어떤 항목은 1~2분기 관찰인지 구분",
-        "```",
+        "## Review Timing",
+        "- 즉시 재검토 조건 vs 1~2분기 관찰 후 재검토 조건 구분",
         "",
-        "마지막으로, Seed Memo와 Monitoring Contract 사이에 모순이 없게 정리해주세요.",
+        "---",
     ])
 
     return "\n".join(lines)

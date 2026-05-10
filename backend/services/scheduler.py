@@ -70,15 +70,18 @@ def _fmt_metrics(metrics_data) -> str:
 
 
 def run_break_monitor_job():
-    """confirmed + daily_alert=True 종목 Break Monitor 실행."""
+    """confirmed 종목 전체 Break Monitor 실행.
+    - daily_alert=True: 신호 유무 무관하게 항상 Telegram 알림 (주시 종목)
+    - daily_alert=False: 유의미한 신호(has_signal=True) 감지 시에만 Telegram 알림
+    """
     logger.info("Break Monitor job started")
     db = SessionLocal()
     try:
         from sqlalchemy.orm import selectinload
+        # 모든 confirmed thesis 대상 (daily_alert 무관)
         tickers = (
             db.query(Ticker)
             .options(selectinload(Ticker.theses))
-            .filter(Ticker.daily_alert == True)  # noqa: E712
             .all()
         )
         targets = [
@@ -127,12 +130,16 @@ def run_break_monitor_job():
                 db.add(signal)
                 db.commit()
 
-                notify_break_monitor(
-                    ticker.symbol, ticker.name,
-                    result.get("observations", ""),
-                    ticker_id=str(ticker.id),
-                )
-                logger.info("Break Monitor 완료: %s (signal_id=%s)", ticker.symbol, signal.id)
+                # Telegram: daily_alert=True(주시 종목)는 항상, 그 외는 신호 감지 시만
+                should_notify = ticker.daily_alert or result.get("has_signal", False)
+                if should_notify:
+                    notify_break_monitor(
+                        ticker.symbol, ticker.name,
+                        result.get("observations", ""),
+                        ticker_id=str(ticker.id),
+                    )
+                logger.info("Break Monitor 완료: %s (signal=%s, notify=%s, signal_id=%s)",
+                            ticker.symbol, result.get("has_signal"), should_notify, signal.id)
             except Exception:
                 logger.exception("Break Monitor 실패: %s", ticker.symbol)
                 try:
@@ -177,7 +184,6 @@ def run_weekly_briefing_job():
         tickers = (
             db.query(Ticker)
             .options(selectinload(Ticker.theses))
-            .filter(Ticker.daily_alert == True)  # noqa: E712
             .all()
         )
         portfolio_summary = []
@@ -189,23 +195,44 @@ def run_weekly_briefing_job():
                     "status": t.status.value,
                 })
 
-        # 지난주 Break Signal 요약 수집
+        # 지난주 Break Signal 수집 + 신호 통계
         from models.db import BreakSignal
         from datetime import timedelta
         week_ago = datetime.utcnow() - timedelta(days=7)
         signal_summaries: list[str] = []
+        monitor_stats = {"total": len(portfolio_summary), "with_signal": 0, "no_signal": 0}
         try:
-            signals = (
-                db.query(BreakSignal)
+            # 종목별 최신 signal 1건씩
+            from sqlalchemy import func
+            latest_signal_ids = (
+                db.query(func.max(BreakSignal.id))
                 .filter(BreakSignal.checked_at >= week_ago)
-                .order_by(BreakSignal.checked_at.desc())
-                .limit(20)
+                .group_by(BreakSignal.thesis_id)
                 .all()
             )
+            latest_ids = [row[0] for row in latest_signal_ids if row[0]]
+            signals = (
+                db.query(BreakSignal)
+                .filter(BreakSignal.id.in_(latest_ids))
+                .order_by(BreakSignal.checked_at.desc())
+                .all()
+            ) if latest_ids else []
+
+            tickers_with_signal = set()
             for s in signals:
-                verdict_str = f" [{s.verdict.value.upper()}]" if s.verdict else " [판정 대기]"
+                # 신호 판별: positive/negative signals에 실제 내용이 있으면 신호 있음
+                def _has_content(text):
+                    clean = (text or "").strip()
+                    return bool(clean) and "특이사항 없음" not in clean
+                has_sig = _has_content(s.positive_signals) or _has_content(s.negative_signals)
+                if has_sig:
+                    tickers_with_signal.add(str(s.thesis_id))
+                verdict_str = f" [{s.verdict.value.upper()}]" if s.verdict else (" [신호]" if has_sig else " [이상없음]")
                 obs_snippet = (s.observations or "")[:120].replace("\n", " ")
                 signal_summaries.append(f"{s.checked_at.strftime('%m/%d')}{verdict_str} {obs_snippet}")
+
+            monitor_stats["with_signal"] = len(tickers_with_signal)
+            monitor_stats["no_signal"] = monitor_stats["total"] - monitor_stats["with_signal"]
         except Exception:
             pass  # break_signals 테이블 없을 경우 skip
 
@@ -213,6 +240,7 @@ def run_weekly_briefing_job():
             portfolio_summary,
             macro_context=macro_context,
             signal_summaries=signal_summaries,
+            monitor_stats=monitor_stats,
         )
 
         report = Report(ticker_id=None, type=ReportTypeEnum.DAILY_BRIEF, content=sections["full_text"])

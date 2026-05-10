@@ -1,20 +1,20 @@
 # Value Investing Copilot — CLAUDE.md
 
 > 가치투자자를 위한 AI 투자 분석 코파일럿.
-> 자동매매 없음. AI가 초안 생성, 사람이 확정하는 Human-in-the-loop 구조.
+> 자동매매 없음. Thesis는 사람이 직접 작성·확정. AI는 보고서·Break Monitor·복기에만 사용.
 
 ---
 
 ## 핵심 철학 (절대 어기지 말 것)
 
-1. AI는 초안만 생성 → **사람이 confirmed 눌러야** Break Monitor 등 모든 감시 활성화
+1. **Thesis는 사람이 직접 작성** — 외부 Claude에서 완성한 결과를 "Thesis 작성" 모달로 직접 입력. AI thesis 생성 없음
 2. `draft → confirmed → retired` 상태 머신 + **버전 관리** — 수정 = 새 버전 생성, 기존 버전 보존
 3. Macro는 보고서/대시보드로만 — 개별 thesis DB에 넣지 않음
 4. 보고서 읽기는 **웹앱**, 명령 실행·알림은 **Telegram**
 5. 자동매매 코드는 절대 작성하지 않음
-6. **데이터 수집과 분석은 분리** — 재무 데이터를 먼저 수집(refresh-data)한 뒤 AI 분석 실행
+6. **데이터 수집은 보고서·Break Monitor용** — 재무 데이터(refresh-data)는 심층 보고서 생성과 Break Monitor 감시에 사용. Thesis 직접 입력에는 불필요
 7. **뉴스는 Monitoring Contract 렌즈로 필터링** — 주가/목표가/애널리스트 의견은 노이즈. Break Conditions와 Watch Metrics에 직접 영향을 주는 사건만 신호
-8. **Thesis는 관점 기반 생성** — stock_type + seed_memo + exploration_note + monitoring_contract 입력. AI는 사람의 관점을 정리하는 역할
+8. **Thesis는 외부 완성 후 직접 입력** — 외부 Claude에서 심층 분석 → Thesis 완성 프롬프트(5개 필드 산출) → 앱에 붙여넣기. 5개 필드: thesis / risk / key_assumptions / valuation / monitoring_contract
 9. **종목 상세 보고서는 중립** — 결론 없이 Bull/Bear 논거 병기
 10. **탐색은 밖에서, 확정은 시스템에서** — 종목 탐색·포트폴리오 점검·집중분석·Monitoring Contract 산출은 외부 Claude로, 결과를 시스템에 기록
 11. **LLM은 관찰, 사람은 판단** — Break Monitor는 관찰(observations, positive/negative signals)만 출력, verdict(strengthening/intact/weakening/broken)는 사람이 결정
@@ -38,8 +38,10 @@ value-copilot/
 │   ├── models/
 │   │   └── db.py                   # ORM 모델 + Enum 정의
 │   ├── routes/
-│   │   ├── tickers.py              # 종목 CRUD + analyze/refine/refresh-data/report/bulk-*
+│   │   ├── tickers.py              # 종목 CRUD + thesis/direct/refresh-data/report/bulk-*
 │   │   │                           # + DELETE /{id} (cascade) + POST /{id}/resolve-valley (단건)
+│   │   │                           # POST /{id}/thesis/direct — AI 없이 5개 필드 직접 저장 (UI)
+│   │   │                           # POST /{id}/analyze — SSE thesis AI (Telegram bot 내부용만)
 │   │   ├── thesis.py               # Thesis CRUD + confirm
 │   │   ├── reports.py              # 보고서 관리 + macro 트리거 + explore-prompt 생성
 │   │   ├── portfolio.py            # KIS 동기화 트리거 + 거래 감지
@@ -98,11 +100,12 @@ value-copilot/
         │   │                       # 종목 단건 삭제 (카드 Trash 아이콘 → 확인 모달)
         │   │                       # (bulk Thesis 생성 제거됨 — 관점 입력 필요로 개별 생성)
         │   ├── Thesis.tsx          # Thesis탭 + 재무데이터탭 + 보고서탭 + 버전히스토리탭
-        │   │                       # AI 분석 버튼 → 모달(stock_type + seed_memo + exploration_note)
-        │   │                       # 외부 탐색 도구: 심층분석 프롬프트 / 반대논거 탐색 프롬프트
+        │   │                       # "Thesis 작성" 버튼 → 직접 입력 모달
+        │   │                       #   stock_type 선택 + 5개 필드(thesis/risk/key_assumptions/valuation/monitoring_contract)
+        │   │                       #   전체 붙여넣기: [THESIS][RISK][KEY_ASSUMPTIONS][VALUATION][MONITORING_CONTRACT] 자동 파싱
+        │   │                       # 외부 탐색 도구: 심층분석 프롬프트 / Thesis 완성 프롬프트 (2개만)
         │   │                       # 종목별 탐색 기록(ConversationImport) 인라인 표시
-        │   │                       # key_logic 카드 (Confirm 전 필수 입력)
-        │   │                       # 새 버전 생성 / 버전 히스토리 (v1→v2 비교)
+        │   │                       # 버전 히스토리: 5개 필드 모두 접고 펼치기 가능 (VersionCard)
         │   ├── Reports.tsx         # 보고서 히스토리 + 읽음관리 + 코멘트 + 종류 필터 + 복수삭제
         │   │                       # 탐색 프롬프트 복사: 종목 탐색 / 포트폴리오 점검 (외부 Claude용)
         │   │                       # 보고서 섹션별 HumanResponse 메모 슬롯
@@ -126,7 +129,7 @@ Ticker:
   name: str
   market: enum         # US_Stock | KR_Stock
   status: enum         # portfolio | watchlist
-  daily_alert: bool    # Break Monitor 대상 여부
+  daily_alert: bool    # 주시 종목 여부 — True: 신호 유무 무관 항상 Telegram 알림 / False: 신호 감지 시에만 알림
   created_at, updated_at
 
 # Thesis — 투자 노트 (버전 관리)
@@ -143,21 +146,22 @@ Thesis:
   valuation: text
   last_analyzed_at: datetime
   stock_type: enum | null  # compounding | growth | asset_play | turnaround | cyclical | special_situation
-  seed_memo: text | null          # 사용자의 초기 투자 관점
-  exploration_note: text | null   # 외부 탐색에서 건진 핵심 인사이트 (AI 분석 모달 입력)
-  key_logic: text | null          # Core Logic 1~2문단 요약 — Confirm 전 필수 (monitoring_contract의 Core Logic 요약)
-  monitoring_contract: text | null  # Break Monitor가 그대로 사용할 감시 계약서
-                                    # 형식: Core Logic / Break Conditions / Strengthening Signals / Watch Metrics
+  seed_memo: text | null          # 구버전 필드 (신규 입력 없음, 기존 데이터 호환용)
+  exploration_note: text | null   # 구버전 필드 (신규 입력 없음, 기존 데이터 호환용)
+  key_logic: text | null          # 구버전 필드 — monitoring_contract Core Logic과 중복. DB 유지, 모달 입력 제거
+  monitoring_contract: text | null  # Break Monitor가 그대로 사용할 감시 계약서 (핵심)
+                                    # 형식: Core Logic / Break Conditions / Strengthening Signals / Watch Metrics / Review Timing
   retired_at: datetime | null
   retirement_reason: str | null  # superseded | broken | sold | manual
 
   # 비즈니스 규칙
-  # - Ticker.thesis @property: confirmed > needs_review > draft (version_number 내림차순)
-  # - AI 분석 시 confirmed 버전 있으면 새 draft 버전 생성 (기존 유지)
+  # - Ticker.thesis @property: confirmed > needs_review > draft (version_number 내림차순, NULLS LAST)
+  # - "Thesis 작성" 시 confirmed 버전 있으면 새 draft 버전 생성 (기존 유지)
+  # - "Thesis 작성" 시 draft/needs_review 버전 있으면 in-place 수정
   # - Confirm 시 이전 non-retired 버전들 → retired (retirement_reason='superseded')
-  # - monitoring_contract 또는 key_logic 중 하나 이상 있어야 Confirm 가능
-  # - Break Monitor는 monitoring_contract 우선, 없으면 key_logic, 없으면 key_assumptions 폴백
-  # - 외부 Claude 대화에서 Monitoring Contract 산출 → 앱에 붙여넣어 AI 분석 시 입력
+  # - monitoring_contract 필수 (또는 key_logic fallback) — Break Monitor 감시 기준
+  # - Break Monitor: monitoring_contract 우선, 없으면 key_logic, 없으면 key_assumptions 폴백
+  # - version_number ORDER BY: .nullslast() 필수 — NULL이 NULLS FIRST로 정렬되는 PG 기본값 방지
 
 # Report — 생성된 보고서
 Report:
@@ -355,20 +359,19 @@ Rate limit 보호:
     valuation / risk_matrix / recent_developments / bull_bear_synthesis
   → Telegram notify_report_generated + 딥링크
     ↓
-[AI 분석] ("AI 분석" 버튼 → 모달)
-  사람: 보고서를 읽고 관점 수립
-      → stock_type 선택 (compounding|growth|asset_play|turnaround|cyclical|special_situation)
-      → seed_memo 작성 (나의 초기 관점, 필수)
-  → 해당 stock_type 프레임워크 파일 동적 로드 + exploration_note + monitoring_contract 포함
-  → Claude Sonnet (max_tokens=8192) → Thesis 6섹션 초안 (thesis/risk/key_assumptions/valuation/key_logic/monitoring_contract)
-    ↓
-[피드백 루프] (선택, 반복 가능)
-  사람 피드백 → Claude Sonnet → 수정된 Thesis
+[Thesis 직접 입력] ("Thesis 작성" 버튼 → 모달)
+  외부 플로우:
+    1. Thesis 페이지 "심층 분석 프롬프트" 복사 → 외부 Claude에서 대화 시작
+    2. 논의 완료 후 "Thesis 완성 프롬프트" 복사 → 외부 Claude에서 5개 필드 산출
+       출력 형식: [THESIS] / [RISK] / [KEY_ASSUMPTIONS] / [VALUATION] / [MONITORING_CONTRACT]
+    3. 결과 전체를 앱 "Thesis 작성" 모달 → 전체 붙여넣기 textarea → "채우기" 클릭 → 자동 파싱
+    4. stock_type 선택 후 저장 → draft 생성
+  API: POST /api/tickers/{id}/thesis/direct (AI 호출 없음, 즉시 저장)
     ↓
 [Confirm] (사람만)
   draft / needs_review → confirmed
-  monitoring_contract 또는 key_logic 중 하나 이상 필수
-  Break Monitor 활성화 (daily_alert=True 종목)
+  monitoring_contract 필수 (key_logic fallback 가능)
+  Break Monitor 활성화 (confirmed 전체 대상, daily_alert=True면 항상 알림)
   → Telegram notify_thesis_confirmed
 
 [보고서 탭]
@@ -422,11 +425,14 @@ Rate limit 보호:
 [매일 자동]
   06:00  light_refresh  : news/metrics/insider_trades 갱신
                           + US_Stock 종목별 8-K 신규 공시 체크 (이미 요약된 건 즉시 스킵)
-  08:00  break_monitor  : confirmed 종목 → Monitoring Contract 기준으로 관찰 출력
-                          (monitoring_contract 우선, 없으면 key_logic, 없으면 key_assumptions 폴백)
+  08:00  break_monitor  : confirmed 전체 종목 실행 (daily_alert 무관)
+                          Monitoring Contract 기준 관찰 (→ key_logic → key_assumptions 폴백)
                           → BreakSignal DB 저장 (observations/positive_signals/negative_signals/watch_items)
-                          → Telegram (observations 요약, verdict 입력 링크) + /tickers/{id}/thesis 딥링크
-  월 08:00 weekly_briefing : 주간 모니터링 브리핑 (3섹션)
+                          → has_signal 판정: positive/negative signals에 실제 내용 있으면 True
+                          → Telegram: daily_alert=True(항상) OR has_signal=True(신호 감지 시)
+                          → /tickers/{id}/thesis 딥링크
+  월 08:00 weekly_briefing : 주간 모니터링 브리핑 (4섹션 — monitor_summary 포함)
+                           → 전체 N개 / 이상없음 N개 / 신호감지 N개 요약
                            → Telegram + /reports 딥링크
 ```
 
@@ -436,24 +442,22 @@ Rate limit 보호:
 
 ```
 (빈값/신규)
-    ↓ "AI 분석" → 모달(stock_type + seed_memo + exploration_note 입력) → 생성
-  draft v1       ← AI 초안. Break Monitor 비활성.
-    ↓ [선택] 피드백 반복
-    ↓ 사람이 monitoring_contract 또는 key_logic 입력 후 confirm
-  confirmed v1   ← Break Monitor 활성 (daily_alert=True 시).
-    ↓ "AI 분석" 재실행 (새 draft v2 생성, v1 그대로 유지)
+    ↓ "Thesis 작성" → 외부 Claude 완성 결과 붙여넣기 → 저장
+  draft v1       ← 직접 입력 초안. Break Monitor 비활성.
+    ↓ 사람이 monitoring_contract 확인 후 confirm
+  confirmed v1   ← Break Monitor 활성 (confirmed 전체 대상).
+    ↓ "Thesis 작성" 재실행 (새 draft v2 생성, v1 그대로 유지)
   confirmed v1 + draft v2
-    ↓ 사람이 v2 monitoring_contract 또는 key_logic 입력 후 confirm
+    ↓ 사람이 v2 confirm
   confirmed v2 + retired v1 (retirement_reason='superseded')
 ```
 
 **규칙:**
 - `confirmed` 상태가 아니면 Break Monitor 절대 발동하지 않음
-- AI가 임의로 `confirmed`로 바꾸지 않음 — 반드시 사람 액션 필요
-- confirmed thesis에서 AI 분석 → 새 버전 draft 생성 (기존 confirmed 유지, needs_review로 바뀌지 않음)
-- draft/needs_review thesis에서 AI 분석 → 동일 버전 in-place 수정
-- **Confirm 전 monitoring_contract 또는 key_logic 중 하나 이상 필수** — Break Monitor 감시 기준
-- **bulk Thesis 생성 없음** — 각 종목마다 stock_type + seed_memo 개별 입력 필수
+- confirmed thesis에서 "Thesis 작성" → 새 draft 버전 생성 (기존 confirmed 유지)
+- draft/needs_review thesis에서 "Thesis 작성" → 동일 버전 in-place 수정
+- **Confirm 전 monitoring_contract 필수** (key_logic fallback 가능) — Break Monitor 감시 기준
+- **bulk Thesis 생성 없음** — 각 종목마다 외부 Claude 탐색 후 개별 직접 입력
 
 ---
 
@@ -464,7 +468,7 @@ Rate limit 보호:
 | 함수 | 트리거 | 링크 |
 |---|---|---|
 | `notify_thesis_confirmed` | 사람이 Confirm 클릭 | `/tickers/{id}/thesis` |
-| `notify_thesis_needs_review` | confirmed thesis에서 AI 새 버전 생성 완료 | `/tickers/{id}/thesis` |
+| `notify_thesis_needs_review` | confirmed thesis에서 "Thesis 작성"으로 새 draft 버전 생성 시 | `/tickers/{id}/thesis` |
 | `notify_break_monitor` | 08:00 Break Monitor 실행 — observations 요약 + Verdict 입력하기 링크 | `/tickers/{id}/thesis` |
 | `notify_report_generated` | 종목 심층 분석 보고서 저장 | `/reports?id={id}` |
 | `notify_weekly_briefing` | 월 08:00 주간 브리핑 저장 | `/reports?id={id}` |
@@ -490,12 +494,12 @@ Backend    Python 3.11 + FastAPI + SSE
                         cycles / retrospectives / market / settings
 
 Agent      Anthropic API
-           - claude-sonnet-4-6: thesis/report/break_monitor/weekly_briefing/macro
-             max_tokens: thesis 8192 (THESIS_MAX_TOKENS), refine 8192, report 16000,
-                         weekly_briefing 4096, macro 4096, break-monitor 1024
+           - claude-sonnet-4-6: report/break_monitor/weekly_briefing/macro (thesis AI 생성 없음 — UI에서 직접 입력)
+             max_tokens: report 16000, weekly_briefing 4096, macro 4096, break-monitor 1024
            - claude-haiku-4-5-20251001: SEC/DART 공시 요약 (max_tokens 600, 비용 절감)
-           SKILL.md 기반 스킬 시스템 (6개 스킬: thesis-generator, report-generator,
-                                      break-monitor, macro-report, weekly-briefing, exploration-prompt-generator)
+           SKILL.md 기반 스킬 시스템 (5개 스킬: report-generator, break-monitor, macro-report,
+                                      weekly-briefing, exploration-prompt-generator)
+           thesis-generator: Telegram bot bulk-analyze 내부용으로만 유지 (UI에서 미사용)
            .scratchpad/*.jsonl 로깅 (SCRATCHPAD_DIR=/app/.scratchpad)
 
 DB         PostgreSQL 15 (프로덕션: EC2 3.26.145.173)
@@ -508,7 +512,9 @@ DB         PostgreSQL 15 (프로덕션: EC2 3.26.145.173)
            startup 시 자동 마이그레이션 순서:
              0. ALTER TYPE enum ADD VALUE — AUTOCOMMIT 연결로 분리 (트랜잭션 블록 불가)
                 reporttypeenum: discovery, portfolio_review 추가
-                thesisstatusenum: retired 추가
+                thesisstatusenum: retired 추가 (소문자 — _pg_enum values 기준)
+                thesisstatusenum 소문자 정규화: DRAFT/CONFIRMED/NEEDS_REVIEW → draft/confirmed/needs_review
+                  (기존 대문자 값이 있는 경우 rename, _pg_enum 전환으로 소문자 values 사용)
              1. create_all() — 신규 테이블/enum 생성
              2. ReportTypeEnum 값 이름 변경 (ANALYSIS→analysis 등)
              3. is_read BOOLEAN 컬럼 추가 (reports)
@@ -517,6 +523,7 @@ DB         PostgreSQL 15 (프로덕션: EC2 3.26.145.173)
              6. idea_memos 테이블 생성
              7. stock_type / seed_memo 컬럼 추가 (theses)
              8. Phase 2: theses unique 제약 제거 + version_number/key_logic 등 컬럼 추가
+                version_number 백필 (NULL→1) — 앞 DDL과 독립 커밋으로 분리
              9. conversation_imports / human_responses 테이블 생성
 
 External   yfinance: US 기본 소스 (재무제표+지표+뉴스 통합, 24h TTL)
@@ -547,15 +554,11 @@ Deploy     EC2 (ap-southeast-2, 3.26.145.173) + Docker Compose + nginx
 ## Agent Skills 상세
 
 ### thesis-generator/SKILL.md
-- **관점 기반 생성**: seed_memo(사용자 초기 관점)를 기반으로 thesis 초안 작성. AI가 관점을 만들지 않음
+- **⚠️ UI에서 미사용** — Telegram bot의 `/api/tickers/bulk-analyze` 내부용으로만 유지
+- UI thesis 입력은 `POST /api/tickers/{id}/thesis/direct` (직접 입력, AI 없음)
 - stock_type에 맞는 프레임워크 파일을 refs/에서 동적 로드 (asset_play → refs/asset_play.md)
-- **6섹션 출력**: thesis / risk / key_assumptions / valuation / **key_logic** / **monitoring_contract**
-  - `key_logic`: 150~250자 핵심 논리 요약 — "이 전제가 깨지면 thesis 즉시 재검토"
-  - `monitoring_contract`: Break Monitor가 그대로 사용할 감시 계약서 (Core Logic / Break Conditions / Strengthening Signals / Watch Metrics)
-- THESIS_MAX_TOKENS = 8192 (6섹션 수용)
-- 외부 대화에서 Monitoring Contract 제공된 경우 내용 보존 우선 — 재발명 금지
-- key_assumptions는 stock_type 프레임워크 기준으로 측정 가능한 수치로 작성 (Break Monitor 기준)
-- 재무 데이터 있으면 실제 수치 기반, 없으면 graceful fallback
+- 6섹션 출력: thesis / risk / key_assumptions / valuation / key_logic / monitoring_contract
+- bulk-analyze: 기존 thesis의 stock_type 사용, 없으면 "compounding" default
 
 ### thesis-generator/refs/ (stock_type별 프레임워크)
 | 파일 | 유형 | 핵심 지표 | 주요 밸류에이션 |
@@ -577,37 +580,50 @@ Deploy     EC2 (ap-southeast-2, 3.26.145.173) + Docker Compose + nginx
 - max_tokens=16000. 섹션당 길이 최소화 제약 없음 — 인사이트 밀도 우선
 
 ### break-monitor/SKILL.md
-- confirmed + daily_alert=True 종목만
+- **대상**: confirmed 전체 (daily_alert 무관하게 실행)
+- **알림 전략**:
+  - `daily_alert=True` (주시 종목): 신호 유무 무관하게 항상 Telegram 알림
+  - `daily_alert=False`: `has_signal=True`일 때만 Telegram 알림
 - **Monitoring Contract 우선 기준**: monitoring_contract → key_logic → key_assumptions 순 폴백
 - **4섹션 출력** (레이블 없음 — 판정은 사람이):
   - `observations`: "무엇이 바뀌었는가" 중립 관찰
-  - `positive_signals`: Strengthening Signals에 해당하는 thesis 강화 신호
-  - `negative_signals`: Break Conditions에 가까워지는 thesis 약화 신호
+  - `positive_signals`: Core Logic 강화 사실만 (Strengthening Signals 기준)
+  - `negative_signals`: Break Conditions에 가까워지는 사실만
   - `watch_items`: 다음 체크 때 확인할 항목
-- **stock_type별 신호 분기** (monitoring_contract 없을 때 기준):
-  - compounding: ROIC 하락, FCF 훼손, 경쟁 구조 변화
-  - growth: 매출 성장 둔화, Cash runway, Unit economics 악화
-  - asset_play: 자산 가치 훼손, 촉매 이벤트 지연
-  - turnaround: 핵심 촉매 지연/실패, Cash runway 위험
-  - cyclical: 사이클 선행지표 악화, 부채 임계치 접근
-  - special_situation: 이벤트 무산 리스크, 타임라인 연장
+- **필터링 원칙** (has_signal 신뢰성의 핵심):
+  - positive/negative signals는 Monitoring Contract 기준에 직접 연결된 사실만
+  - 무조건 무시: 주가 등락 / 애널리스트 목표가 / 컨센서스 beat/miss / 계약서에 없는 매크로
+  - Key Metrics TTM: Monitoring Contract에서 언급된 지표의 방향성 변화만
+- **`has_signal` 판정**: positive 또는 negative signals에 "특이사항 없음" 이상의 내용 → True
+- **stock_type별 폴백 기준** (monitoring_contract 없을 때):
+  - compounding: ROIC 추이, FCF 전환율, 경쟁 구조 변화
+  - growth: 매출 성장률, Gross Margin, Cash runway
+  - asset_play: 자산 가치 변화, 촉매 이벤트 진행
+  - turnaround: 촉매 일정 진행, Cash runway 변화
+  - cyclical: 사이클 선행지표 방향, 부채 수준
+  - special_situation: 이벤트 타임라인, 리스크 변화
 - **사람 판정 (verdict)**: strengthening | intact | weakening | broken — AI가 결정하지 않음
 - BreakSignal DB에 저장 → Thesis 페이지에서 verdict 입력 가능
 
 ### weekly-briefing/SKILL.md
 - **daily-briefing 대체** (월 08:00)
-- 3섹션: macro_changes / break_summary / upcoming_events
+- **4섹션**: monitor_summary / macro_changes / break_summary / upcoming_events
+  - `monitor_summary`: "전체 N개 — 이상 없음 N개 / 신호 감지 N개" + 신호 종목 요약
+  - `break_summary`: 신호 감지 종목만 (이상 없는 종목 생략)
 - max_tokens=4096
+- 입력: 지난주 Break Signal 종목별 최신 1건 + 신호 통계(monitor_stats) + 매크로 지표
 
 ### exploration-prompt-generator/SKILL.md
 - 외부 Claude 탐색용 프롬프트 생성 (LLM 호출 없음, DB 데이터 조립)
 - 유형:
   - `discovery` (Reports 페이지): 종목 탐색
   - `portfolio_review` (Reports 페이지): 포트폴리오 점검
-  - `deep_analysis` (Thesis 페이지): 종목 심층 분석
-  - `thesis_challenge` (Thesis 페이지): 반대 논거 탐색
-  - `monitoring_contract` (Thesis 페이지): Monitoring Contract 산출 — seed_memo + thesis 기반으로 계약서 초안 생성용 프롬프트
+  - `deep_analysis` (Thesis 페이지): 종목 심층 분석 — 외부 대화 시작용. 보고서 데이터 주입
+  - `monitoring_contract` (Thesis 페이지): Thesis 완성 프롬프트 — 외부 대화 마무리용
+      5개 필드 산출: [THESIS][RISK][KEY_ASSUMPTIONS][VALUATION][MONITORING_CONTRACT]
+      기존 thesis 컨텍스트 미포함 — 외부 대화 내용 그대로 구조화
   - `thesis_revision` (Thesis 페이지): Break Monitor 신호 기반 Thesis 재검토 프롬프트
+  - thesis_challenge (반대 논거 탐색): 제거됨 — 외부 대화 중 자연스럽게 질문으로 대체
 - API: GET /api/reports/explore-prompt?type=... (전체 포트폴리오 기준)
        GET /api/tickers/{id}/explore-prompt?type=... (종목별 보고서/thesis 포함)
 
@@ -672,10 +688,12 @@ docker compose up -d --build  # 의존성 변경 후
 - **8-K 파이프라인**: 실적(2.02)/임원(5.02)/계약(1.01)/가이던스(7.01)/주요이벤트(8.01) 필터. EX-99.1(press release) 자동 추출. 06:00 light_refresh에서 신규 8-K 자동 체크. 이미 요약된 건(ticker_id+period+filing_type 중복) 즉시 스킵
 - **CIK 캐시**: `_cik_cache` dict로 company_tickers.json 중복 호출 방지. workers=1이라 프로세스 메모리 캐시 안전
 
-### Thesis 생성
-- **stock_type 필수**: "AI 분석" 버튼 클릭 시 모달에서 stock_type 선택 + seed_memo 작성 필수
-- **bulk Thesis 생성 없음**: Dashboard의 일괄 Thesis 생성 버튼 제거됨. 각 종목 페이지에서 개별 생성
-- **bulk-analyze 엔드포인트**: 백엔드 `POST /api/tickers/bulk-analyze` 엔드포인트는 여전히 존재(Telegram bot 등 내부용). 기존 thesis의 stock_type 사용, 없으면 "compounding" default
+### Thesis 입력
+- **직접 입력 플로우**: 외부 Claude → 심층 분석 → Thesis 완성 프롬프트 → 5개 필드 산출 → 앱 "Thesis 작성" 모달 붙여넣기
+- **전체 붙여넣기 파싱**: [THESIS][RISK][KEY_ASSUMPTIONS][VALUATION][MONITORING_CONTRACT] 헤더 자동 인식
+- **stock_type**: 결과 태깅용 레이블 (외부 대화에서 결정된 유형 선택)
+- **bulk Thesis 생성 없음**: Dashboard 일괄 생성 없음. 각 종목 외부 탐색 후 개별 직접 입력
+- **bulk-analyze 엔드포인트**: `POST /api/tickers/bulk-analyze` — Telegram bot 내부용만. 기존 thesis의 stock_type 사용
 
 ### 보고서
 - **보고서 삭제**: 웹앱 UI에서 단건/복수 삭제 가능. 코멘트도 CASCADE 삭제
@@ -720,3 +738,7 @@ docker compose up -d --build  # 의존성 변경 후
 - **아이디어 메모**: `/api/ideas` CRUD. ticker_symbol은 DB 종목 FK 없이 자유 텍스트 (대문자). Journal 페이지의 아이디어 탭에서 관리
 - **자동매매 코드 작성 금지**
 - **Thesis confirmed 변경은 반드시 사람의 명시적 액션으로만**
+- **version_number 정렬**: 모든 쿼리에서 `.order_by(Thesis.version_number.desc().nullslast())` 필수 — PG 기본 NULLS FIRST 방지
+- **Thesis.confirmed enum**: `_pg_enum` (values_callable) 사용 — 소문자 values(draft/confirmed/...) 저장. 순수 SAEnum은 name(대문자) 사용으로 불일치 발생
+- **BreakSignal/InvestmentCycle 삭제**: thesis 버전 삭제 시 DB 레벨 CASCADE/SET NULL이 미적용 가능. 명시적 선행 처리 필수
+- **thesis/direct 저장 후 getThesis**: thesis/direct 성공 후 프론트에서 getThesis 재호출 — version_number nullslast가 올바른 최신 draft 반환하는지 확인 필수

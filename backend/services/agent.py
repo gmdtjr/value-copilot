@@ -375,8 +375,9 @@ def generate_weekly_briefing(
     portfolio_summary: list[dict],
     macro_context: str = "",
     signal_summaries: list[str] | None = None,
+    monitor_stats: dict | None = None,
 ) -> dict:
-    """주간 브리핑 생성 (월요일 08:00). 반환: {break_summary, upcoming_events, macro_changes, full_text}"""
+    """주간 브리핑 생성 (월요일 08:00). 반환: {monitor_summary, break_summary, upcoming_events, macro_changes, full_text}"""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
@@ -396,12 +397,21 @@ def generate_weekly_briefing(
     if signal_summaries:
         signals_block = "\n## 지난주 Break Monitor 관찰 이력\n" + "\n".join(f"- {s}" for s in signal_summaries) + "\n"
 
+    stats = monitor_stats or {}
+    stats_block = ""
+    if stats.get("total"):
+        stats_block = (
+            f"\n## 모니터링 현황\n"
+            f"- 전체 {stats['total']}개 종목 중 이상 없음 {stats.get('no_signal', 0)}개 / "
+            f"신호 감지 {stats.get('with_signal', 0)}개\n"
+        )
+
     user_message = f"""이번 주 투자 모니터링 브리핑을 생성해 주세요.
-{macro_block}{signals_block}
+{macro_block}{stats_block}{signals_block}
 ## 모니터링 대상 종목
 {portfolio_block}
 
-3개 섹션을 XML 태그로 감싸서 출력해 주세요.
+4개 섹션을 XML 태그로 감싸서 출력해 주세요.
 """
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -414,7 +424,7 @@ def generate_weekly_briefing(
     full_text = message.content[0].text
 
     sections: dict = {"full_text": full_text}
-    for sec in ["break_summary", "upcoming_events", "macro_changes"]:
+    for sec in ["monitor_summary", "break_summary", "upcoming_events", "macro_changes"]:
         pattern = rf'<section name="{sec}">(.*?)</section>'
         m = re.search(pattern, full_text, re.DOTALL)
         sections[sec] = m.group(1).strip() if m else ""
@@ -621,7 +631,16 @@ verdict(판정)는 출력하지 마세요.
         m = re.search(rf'<section name="{sec}">(.*?)</section>', full_text, re.DOTALL)
         result[sec] = m.group(1).strip() if m else ""
 
-    _log({"event": "break_monitor_complete", "ticker_id": ticker_id, "symbol": symbol})
+    # 유의미한 신호 감지 — "특이사항 없음" 이상의 내용이 있으면 True
+    def _has_content(text: str) -> bool:
+        clean = (text or "").strip()
+        return bool(clean) and "특이사항 없음" not in clean
+
+    result["has_signal"] = _has_content(result.get("positive_signals", "")) or \
+                           _has_content(result.get("negative_signals", ""))
+
+    _log({"event": "break_monitor_complete", "ticker_id": ticker_id, "symbol": symbol,
+          "has_signal": result["has_signal"]})
     return result
 
 
